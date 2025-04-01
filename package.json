@@ -1,0 +1,28 @@
+{
+  "name": "adgile-backend",
+  "version": "1.0.0",
+  "description": "Backend para refinamento de layouts usando Perplexity API",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "node dist/main",
+    "start:dev": "nest start --watch",
+    "build": "nest build"
+  },
+  "dependencies": {
+    "@nestjs/axios": "^4.0.0",
+    "@nestjs/common": "^11.0.12",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.0.12",
+    "@nestjs/platform-express": "^11.0.12",
+    "@nestjs/swagger": "^11.1.0",
+    "axios": "^1.0.0",
+    "reflect-metadata": "^0.1.13",
+    "rxjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^9.4.3",
+    "@nestjs/schematics": "^9.0.0",
+    "@types/express": "^5.0.1",
+    "typescript": "^4.0.0"
+  }
+}
