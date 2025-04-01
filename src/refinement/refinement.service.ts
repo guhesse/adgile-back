@@ -216,9 +216,9 @@ export class RefinementService {
             this.logger.debug(`Prompt gerado para Perplexity: ${prompt.substring(0, 100)}...`);
             
             // Log detalhado da requisição que será enviada
-            this.logger.log(`Enviando requisição para https://api.perplexity.ai/chat/completions com modelo sonar`);
+            this.logger.log(`Enviando requisição para https://api.perplexity.ai/chat/completions com modelo sonar-pro`);
             
-            // Verificar se a API key está definida (embora já verifiquemos antes)
+            // Verificar se a API key está definida
             const apiKey = this.configService.perplexityApiKey;
             if (!apiKey) {
                 throw new Error('API Key do Perplexity não está configurada');
@@ -226,7 +226,8 @@ export class RefinementService {
             
             // Dados da requisição para facilitar debug
             const requestBody = {
-                model: 'sonar',  // Usando o modelo básico "sonar" conforme documentação atual
+                model: 'sonar-pro',
+                search_context_size: 'low', // Ajustar para "low" para reduzir custos
                 messages: [
                     {
                         role: 'system',
@@ -239,9 +240,6 @@ export class RefinementService {
                 ],
                 max_tokens: 4000
             };
-            
-            // Vamos logar o corpo da requisição (para debug)
-            this.logger.debug(`Request body: ${JSON.stringify(requestBody, null, 2).substring(0, 500)}...`);
             
             // Fazer a chamada à API do Perplexity
             const startTime = Date.now();
@@ -292,206 +290,13 @@ export class RefinementService {
             const aiResponse = perplexityResponse.data.choices[0].message.content;
             this.logger.log(`Resposta do Perplexity recebida: ${aiResponse.substring(0, 100)}...`);
             
-            // Extrair JSON da resposta (pode estar dentro de blocos de código)
-            let layoutsJson;
-            try {
-                this.logger.log('Tentando analisar resposta do Perplexity como JSON');
-                
-                // 1. Tentar extrair JSON se estiver em blocos de código markdown
-                const jsonMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
-                if (jsonMatch && jsonMatch[1]) {
-                    this.logger.log('Encontrado JSON dentro de bloco de código');
-                    try {
-                        layoutsJson = JSON.parse(jsonMatch[1]);
-                        this.logger.log(`JSON analisado com sucesso do bloco de código`);
-                    } catch (e) {
-                        this.logger.warn('Falha ao parsear JSON do bloco de código, tentando outras abordagens');
-                    }
-                }
-                
-                // 2. Se não conseguiu extrair do bloco de código, tentar encontrar array direto no texto
-                if (!layoutsJson) {
-                    const arrayMatch = aiResponse.match(/\[\s*\{\s*"format"/s);
-                    if (arrayMatch) {
-                        this.logger.log('Encontrado padrão de array JSON na resposta');
-                        // Extrair todo o conteúdo a partir do início do array
-                        const startIndex = aiResponse.indexOf('[');
-                        if (startIndex !== -1) {
-                            let depth = 0;
-                            let endIndex = startIndex;
-                            
-                            // Percorrer a string para encontrar o colchete de fechamento correspondente
-                            for (let i = startIndex; i < aiResponse.length; i++) {
-                                if (aiResponse[i] === '[') depth++;
-                                else if (aiResponse[i] === ']') depth--;
-                                
-                                if (depth === 0) {
-                                    endIndex = i + 1;
-                                    break;
-                                }
-                            }
-                            
-                            if (endIndex > startIndex) {
-                                const jsonStr = aiResponse.substring(startIndex, endIndex);
-                                try {
-                                    layoutsJson = JSON.parse(jsonStr);
-                                    this.logger.log(`JSON extraído diretamente do texto (${jsonStr.length} caracteres)`);
-                                } catch (e: unknown) {
-                                    const errorMessage = e instanceof Error 
-                                        ? e.message 
-                                        : 'Erro desconhecido';
-                                    this.logger.warn(`Falha ao parsear JSON extraído do texto: ${errorMessage}`);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 3. Se ainda não conseguiu, tentar interpretar a resposta diretamente
-                if (!layoutsJson) {
-                    try {
-                        this.logger.log('Tentando interpretar resposta diretamente como JSON');
-                        layoutsJson = JSON.parse(aiResponse);
-                        this.logger.log('JSON analisado com sucesso da resposta direta');
-                    } catch (e: unknown) {
-                        const errorMessage = e instanceof Error 
-                            ? e.message 
-                            : 'Erro desconhecido';
-                        this.logger.warn(`Falha ao parsear resposta completa: ${errorMessage}`);
-                    }
-                }
-                
-                // Se ainda não temos um JSON válido, tentar remover qualquer texto antes/depois do JSON
-                if (!layoutsJson) {
-                    this.logger.log('Tentando extrair JSON da resposta usando abordagem mais agressiva');
-                    // Procurar por qualquer bloco que pareça um array JSON
-                    const possibleJsonPattern = /\[\s*{[\s\S]*}\s*\]/;
-                    const possibleJsonMatch = aiResponse.match(possibleJsonPattern);
-                    
-                    if (possibleJsonMatch) {
-                        try {
-                            // Limpar o JSON para remover vírgulas extras em objetos que podem causar parsing errors
-                            const cleanedJson = possibleJsonMatch[0]
-                                .replace(/,(\s*[}\]])/g, '$1') // Remove vírgulas antes de chaves/colchetes fechando
-                                .replace(/,(\s*})/g, '$1');    // Remove vírgulas extras antes de fechar objetos
-
-                            // Validar e corrigir estrutura JSON
-                            const fixedJson = this.tryFixJsonStructure(cleanedJson);
-                            
-                            layoutsJson = JSON.parse(fixedJson);
-                            this.logger.log('JSON extraído e corrigido com sucesso usando regex mais agressiva');
-                        } catch (e: unknown) {
-                            const errorMessage = e instanceof Error 
-                                ? e.message 
-                                : 'Erro desconhecido';
-                            this.logger.warn(`Falha ao parsear possível JSON: ${errorMessage}`);
-                        }
-                    }
-                }
-                
-                // Verificar se o JSON é um array ou um objeto único e normalizar para array
-                if (layoutsJson) {
-                    this.logger.log(`JSON analisado com sucesso: ${JSON.stringify(layoutsJson).substring(0, 100)}...`);
-                    
-                    if (!Array.isArray(layoutsJson)) {
-                        this.logger.warn('Resposta não é um array, tentando normalizar');
-                        
-                        // Verificar se é um objeto de layout válido (com format e elements)
-                        if (layoutsJson.format && layoutsJson.elements) {
-                            this.logger.log('Convertendo objeto único em array');
-                            layoutsJson = [layoutsJson]; // Converter objeto único em array
-                        } else {
-                            // Tentar extrair os objetos de layout do objeto raiz
-                            // Alguns modelos podem retornar { "layouts": [...] } ou outro formato aninhado
-                            const possibleArrayProps = Object.values(layoutsJson).filter(val => Array.isArray(val));
-                            if (possibleArrayProps.length > 0) {
-                                this.logger.log('Encontrado array aninhado na resposta');
-                                layoutsJson = possibleArrayProps[0];
-                            } else {
-                                // Tentar verificar se as chaves são os nomes dos formatos
-                                const layoutsArray = [];
-                                const targetFormatNames = targetFormats.map(f => f.name);
-                                
-                                for (const key in layoutsJson) {
-                                    const item = layoutsJson[key];
-                                    // Verificar se a chave corresponde a um formato alvo
-                                    if (targetFormatNames.includes(key) && item.elements) {
-                                        layoutsArray.push({
-                                            format: targetFormats.find(f => f.name === key),
-                                            elements: item.elements
-                                        });
-                                    } else if (item.format && item.elements) {
-                                        // Se o item já tem o formato esperado
-                                        layoutsArray.push(item);
-                                    }
-                                }
-                                
-                                if (layoutsArray.length > 0) {
-                                    this.logger.log(`Extraídos ${layoutsArray.length} layouts do objeto`);
-                                    layoutsJson = layoutsArray;
-                                } else {
-                                    throw new Error('Não foi possível normalizar a resposta para um array de layouts');
-                                }
-                            }
-                        }
-                    }
-                    
-                    this.logger.log(`Após normalização: ${Array.isArray(layoutsJson) ? layoutsJson.length : 0} layouts encontrados`);
-                } else {
-                    throw new Error('Não foi possível extrair JSON válido da resposta da IA após múltiplas tentativas');
-                }
-            } catch (parseError: unknown) {
-                const errorMessage = parseError instanceof Error 
-                    ? parseError.message 
-                    : 'Erro desconhecido';
-                this.logger.error(`Erro ao parsear resposta do Perplexity: ${errorMessage}`);
-                this.logger.debug(`Resposta que causou erro: ${aiResponse}`);
+            // Processar JSON da resposta
+            const layoutsJson = this.tryParseJson(aiResponse, targetFormats);
+            if (!layoutsJson) {
                 throw new Error('Não foi possível interpretar a resposta da IA.');
             }
             
-            // Validar e formatar a resposta
-            if (!Array.isArray(layoutsJson)) {
-                this.logger.error('Resposta da IA não é um array de layouts');
-                throw new Error('Resposta da IA não é um array de layouts.');
-            }
-            
-            // Garantir que cada layout tenha o formato esperado
-            const refinedLayouts: RefinedLayout[] = layoutsJson.map((layout, index) => {
-                // Verificar se o layout tem o formato obrigatório
-                if (!layout.format || !layout.elements) {
-                    this.logger.warn(`Layout ${index} não possui formato ou elementos.`);
-                    throw new Error(`Layout ${index} não possui formato ou elementos.`);
-                }
-                
-                // Garantir que as propriedades obrigatórias dos elementos estejam presentes
-                const validatedElements = layout.elements.map((element: any) => {
-                    // Se o elemento não tiver as propriedades obrigatórias, usar o método padrão
-                    if (!element.id || !element.type || !element.style) {
-                        this.logger.warn(`Elemento com propriedades inválidas detectado, usando método padrão para adaptação`);
-                        // Encontrar elemento original correspondente
-                        const originalElement = elements.find(e => e.id === element.originalId);
-                        if (originalElement) {
-                            // Adaptar usando método padrão
-                            return this.adaptElementToNewFormat(
-                                originalElement,
-                                currentFormat,
-                                layout.format
-                            );
-                        }
-                    }
-                    
-                    return element;
-                });
-                
-                return {
-                    format: layout.format,
-                    elements: validatedElements
-                };
-            });
-            
-            this.logger.log(`🎉 Refinamento com Perplexity concluído com sucesso. Gerados ${refinedLayouts.length} layouts.`);
-            return refinedLayouts;
-            
+            return layoutsJson;
         } catch (error: unknown) {
             const errorMessage = error instanceof Error 
                 ? error.message 
@@ -525,18 +330,17 @@ export class RefinementService {
         1. ESTRUTURA VISUAL: Preserve a estrutura geral do layout em todos os formatos, mantendo a ordem e disposição relativa dos elementos.
         2. PROPORÇÃO DOS TEXTOS: Ajuste o tamanho dos textos para garantir legibilidade em qualquer formato. Formatos menores devem ter fontes proporcionalmente menores, mas não inferiores a 10px.
         3. EVITAR SOBREPOSIÇÃO: Os elementos NÃO devem se sobrepor ou ficar muito próximos um do outro. Mantenha espaçamento adequado entre elementos.
-        4. ESPAÇAMENTO VERTICAL: Distribua elementos verticalmente de forma equilibrada, mantendo proporções de espaçamento consistentes.
+        4. ESPAÇAMENTO VERTICAL: Distribua elementos verticalmente de forma equilibrada, mantendo proporções de espaçamento consistentes ao layout original.
         5. MANTER IDENTIDADE VISUAL: Cores, fontes e a aparência geral devem ser mantidas em todos os formatos.
         6. PRIORIDADES: Se houver conflito de espaço, priorize o elemento de texto principal, seguido de imagens principais, e depois elementos secundários.
         7. PROPORÇÃO DAS IMAGENS: Preserve a proporção original das imagens para evitar distorções. Não redimensione imagens abaixo de 50% ou acima de 200% do tamanho original.
         8. ALINHAMENTO: Mantenha alinhamentos consistentes em todos os formatos. Ajuste conforme necessário para manter a harmonia visual.
         9. POSICIONAMENTO RELATIVO: Mantenha a posição relativa entre elementos (cabeçalho no topo, rodapé embaixo, etc).
-        10. MARGENS: Ajuste as margens proporcionalmente em cada formato, mantendo um mínimo de 5% da largura/altura do banner.
-        11. QUEBRA DE TEXTO: Em formatos menores, permita quebras de linha em textos longos, mantendo a legibilidade.
-        12. ELEMENTOS RESPONSIVOS: Alguns elementos podem mudar de tamanho ou posição para melhor se adequar a cada formato.
-        13. CONSISTÊNCIA ENTRE FORMATOS: Garanta que todos os formatos mantenham uma aparência consistente entre si, não apenas em relação ao original.
-        14. TRATAMENTO DE ESPAÇOS VAZIOS: Distribua elementos de forma a evitar grandes espaços vazios em formatos maiores ou aglomerações em formatos menores.
-        15. VERIFICAÇÃO FINAL: Certifique-se de que todos os elementos estejam visíveis, legíveis e bem posicionados em cada formato antes de finalizar.
+        10. QUEBRA DE TEXTO: Em formatos menores, permita quebras de linha em textos longos, mantendo a legibilidade.
+        11. ELEMENTOS RESPONSIVOS: Alguns elementos podem mudar de tamanho ou posição para melhor se adequar a cada formato.
+        12. CONSISTÊNCIA ENTRE FORMATOS: Garanta que todos os formatos mantenham uma aparência consistente entre si, não apenas em relação ao original.
+        13. TRATAMENTO DE ESPAÇOS VAZIOS: Distribua elementos de forma a evitar grandes espaços vazios em formatos maiores ou aglomerações em formatos menores.
+        14. VERIFICAÇÃO FINAL: Certifique-se de que todos os elementos estejam visíveis, legíveis e bem posicionados em cada formato antes de finalizar.
         
         INSTRUÇÕES ESPECÍFICAS DE FORMATO JSON:
         Sua resposta DEVE ser um array de layouts no formato JSON estritamente válido.
@@ -803,6 +607,131 @@ export class RefinementService {
         adaptedElement.style.heightPercent = undefined;
 
         return adaptedElement;
+    }
+
+    private tryParseJson(jsonString: string, targetFormats: BannerSize[]): any {
+        // Implementar tentativas de parsing de JSON
+        let parsedJson = null;
+        
+        // 1. Tentar extrair JSON se estiver em blocos de código markdown
+        const jsonMatch = jsonString.match(/```json\s*([\s\S]*?)\s*```/);
+        if (jsonMatch && jsonMatch[1]) {
+            try {
+                parsedJson = JSON.parse(jsonMatch[1]);
+            } catch (e) {
+                // Ignorar erro e continuar
+            }
+        }
+        
+        // 2. Se não conseguiu extrair do bloco de código, tentar encontrar array direto no texto
+        if (!parsedJson) {
+            const arrayMatch = jsonString.match(/\[\s*\{\s*"format"/s);
+            if (arrayMatch) {
+                // Extrair todo o conteúdo a partir do início do array
+                const startIndex = jsonString.indexOf('[');
+                if (startIndex !== -1) {
+                    let depth = 0;
+                    let endIndex = startIndex;
+                    
+                    // Percorrer a string para encontrar o colchete de fechamento correspondente
+                    for (let i = startIndex; i < jsonString.length; i++) {
+                        if (jsonString[i] === '[') depth++;
+                        else if (jsonString[i] === ']') depth--;
+                        
+                        if (depth === 0) {
+                            endIndex = i + 1;
+                            break;
+                        }
+                    }
+                    
+                    if (endIndex > startIndex) {
+                        const jsonStr = jsonString.substring(startIndex, endIndex);
+                        try {
+                            parsedJson = JSON.parse(jsonStr);
+                        } catch (e) {
+                            // Ignorar erro e continuar
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 3. Se ainda não conseguiu, tentar interpretar a resposta diretamente
+        if (!parsedJson) {
+            try {
+                parsedJson = JSON.parse(jsonString);
+            } catch (e) {
+                // Ignorar erro e continuar
+            }
+        }
+        
+        // Se ainda não temos um JSON válido, tentar remover qualquer texto antes/depois do JSON
+        if (!parsedJson) {
+            // Procurar por qualquer bloco que pareça um array JSON
+            const possibleJsonPattern = /\[\s*{[\s\S]*}\s*\]/;
+            const possibleJsonMatch = jsonString.match(possibleJsonPattern);
+            
+            if (possibleJsonMatch) {
+                try {
+                    // Limpar o JSON para remover vírgulas extras em objetos que podem causar parsing errors
+                    const cleanedJson = possibleJsonMatch[0]
+                        .replace(/,(\s*[}\]])/g, '$1') // Remove vírgulas antes de chaves/colchetes fechando
+                        .replace(/,(\s*})/g, '$1');    // Remove vírgulas extras antes de fechar objetos
+
+                    // Validar e corrigir estrutura JSON
+                    const fixedJson = this.tryFixJsonStructure(cleanedJson);
+                    
+                    parsedJson = JSON.parse(fixedJson);
+                } catch (e) {
+                    // Ignorar erro e continuar
+                }
+            }
+        }
+        
+        // Verificar se o JSON é um array ou um objeto único e normalizar para array
+        if (parsedJson) {
+            if (!Array.isArray(parsedJson)) {
+                // Verificar se é um objeto de layout válido (com format e elements)
+                if (parsedJson.format && parsedJson.elements) {
+                    parsedJson = [parsedJson]; // Converter objeto único em array
+                } else {
+                    // Tentar extrair os objetos de layout do objeto raiz
+                    // Alguns modelos podem retornar { "layouts": [...] } ou outro formato aninhado
+                    const possibleArrayProps = Object.values(parsedJson).filter(val => Array.isArray(val));
+                    if (possibleArrayProps.length > 0) {
+                        parsedJson = possibleArrayProps[0];
+                    } else {
+                        // Tentar verificar se as chaves são os nomes dos formatos
+                        const layoutsArray = [];
+                        const targetFormatNames = targetFormats.map((f: BannerSize) => f.name);
+                        
+                        for (const key in parsedJson) {
+                            const item = parsedJson[key];
+                            // Verificar se a chave corresponde a um formato alvo
+                            if (targetFormatNames.includes(key) && item.elements) {
+                                layoutsArray.push({
+                                    format: targetFormats.find((f: BannerSize) => f.name === key),
+                                    elements: item.elements
+                                });
+                            } else if (item.format && item.elements) {
+                                // Se o item já tem o formato esperado
+                                layoutsArray.push(item);
+                            }
+                        }
+                        
+                        if (layoutsArray.length > 0) {
+                            parsedJson = layoutsArray;
+                        } else {
+                            throw new Error('Não foi possível normalizar a resposta para um array de layouts');
+                        }
+                    }
+                }
+            }
+        } else {
+            throw new Error('Não foi possível extrair JSON válido da resposta da IA após múltiplas tentativas');
+        }
+        
+        return parsedJson;
     }
 
     private tryFixJsonStructure(jsonString: string): string {
