@@ -1,33 +1,37 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import * as express from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Aumentar o limite de tamanho do payload
-  app.use(express.json({ limit: '50mb' }));
+  // Habilitar validação global
+  app.useGlobalPipes(new ValidationPipe({
+    whitelist: true,
+    transform: true,
+  }));
 
-  // Configuração CORS simplificada
-  app.enableCors({
-    origin: true, // Aceita requisições de qualquer origem
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: '*',
-    credentials: false // Desativando credentials para evitar problemas com preflight
-  });
+  // Configurar CORS
+  app.enableCors();
 
+  // Prefixo global para APIs
+  app.setGlobalPrefix('api');
+
+  // Configuração do Swagger para documentação da API
   const config = new DocumentBuilder()
     .setTitle('Adgile API')
-    .setDescription('API para refinamento de layouts usando Perplexity')
+    .setDescription('API para gerenciamento de layouts e criações visuais')
     .setVersion('1.0')
-    .addTag('refinement')
-    .addTag('hello')
+    .addTag('layouts')
     .build();
-
+  
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api', app, document);
+  SwaggerModule.setup('api/docs', app, document);
 
-  await app.listen(3000);
+  // Iniciar servidor
+  await app.listen(3333);
+  console.log(`Aplicação rodando em: ${await app.getUrl()}`);
 }
+
 bootstrap();

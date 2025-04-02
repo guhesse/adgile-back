@@ -1,19 +1,28 @@
 import { Module } from '@nestjs/common';
-import { RefinementController } from './refinement/refinement.controller';
-import { RefinementService } from './refinement/refinement.service';
 import { HttpModule } from '@nestjs/axios';
-import { ConfigModule } from '@nestjs/config';
-import { ConfigurationService } from './config/configuration.service';
+import { LayoutController } from './controllers/layout.controller';
+import { RefinementController } from './controllers/refinement.controller';
+import { LayoutService } from './services/layout.service';
+import { RefinementService } from './services/refinement.service';
+import { PrismaService } from './database/prisma.service';
+import { ConfigModule } from './config/config.module';
 
 @Module({
   imports: [
-    HttpModule,
-    ConfigModule.forRoot({
-      isGlobal: true,
-      envFilePath: '.env',
+    HttpModule.register({
+      timeout: 60000,  // Maior timeout para chamadas de IA (60s)
+      maxRedirects: 5,
     }),
+    ConfigModule
   ],
-  controllers: [RefinementController],
-  providers: [RefinementService, ConfigurationService],
+  controllers: [
+    LayoutController,
+    RefinementController
+  ],
+  providers: [
+    LayoutService,
+    RefinementService,
+    PrismaService
+  ],
 })
-export class AppModule { }
+export class AppModule {}

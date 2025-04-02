@@ -1,37 +1,39 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class ConfigurationService {
-  private readonly logger = new Logger(ConfigurationService.name);
+    private readonly logger = new Logger(ConfigurationService.name);
+    private readonly _perplexityApiKey: string;
+    private readonly _usePerplexityAi: boolean;
 
-  constructor() {
-    // Carregar variáveis de ambiente no startup
-    this.logEnvironmentVariables();
-  }
+    constructor() {
+        // Carregar de variáveis de ambiente
+        this._perplexityApiKey = process.env.PERPLEXITY_API_KEY || '';
+        // Verifica ambas as formas de ativar o recurso: 'true' ou '1'
+        this._usePerplexityAi = process.env.USE_PERPLEXITY_AI === 'true' ||
+            process.env.USE_PERPLEXITY_AI === '1';
 
-  get perplexityApiKey(): string | undefined {
-    const apiKey = process.env.PERPLEXITY_API_KEY;
-    if (!apiKey) {
-      this.logger.warn('PERPLEXITY_API_KEY não configurada. A funcionalidade de IA será desabilitada.');
+        // Logar configurações de inicialização (sem revelar a chave completa)
+        const hasApiKey = !!this._perplexityApiKey;
+        this.logger.log(`ConfigurationService inicializado`);
+        this.logger.log(`Perplexity AI: ${this._usePerplexityAi ? 'Habilitado' : 'Desabilitado'}`);
+
+        if (this._usePerplexityAi) {
+            if (hasApiKey) {
+                const maskedKey = this._perplexityApiKey.substring(0, 4) + '...' +
+                    this._perplexityApiKey.substring(this._perplexityApiKey.length - 4);
+                this.logger.log(`API Key configurada: ${maskedKey}`);
+            } else {
+                this.logger.warn(`Perplexity AI está habilitado mas nenhuma API Key foi configurada!`);
+            }
+        }
     }
-    return apiKey;
-  }
 
-  get usePerplexityAi(): boolean {
-    return process.env.USE_PERPLEXITY_AI === 'true';
-  }
-
-  private logEnvironmentVariables(): void {
-    this.logger.log(`Configuração IA: USE_PERPLEXITY_AI=${this.usePerplexityAi}`);
-    
-    // Mascarar a API key para segurança
-    if (this.perplexityApiKey) {
-      const maskedKey = this.perplexityApiKey.substring(0, 4) + '...' + 
-                        this.perplexityApiKey.substring(this.perplexityApiKey.length - 4);
-      this.logger.log(`API key configurada: ${maskedKey}`);
-    } else {
-      this.logger.error('API key do Perplexity não configurada!');
+    get perplexityApiKey(): string {
+        return this._perplexityApiKey;
     }
-  }
+
+    get usePerplexityAi(): boolean {
+        return this._usePerplexityAi;
+    }
 }
