@@ -111,13 +111,14 @@ export class RefinementService {
         
         // Salva o novo layout no banco de dados
         try {
-            await this.layoutService.create({
+            const newLayout = await this.layoutService.create({
                 name: `Layout para: ${prompt.substring(0, 50)}...`,
                 description: prompt,
                 content: JSON.stringify(generatedLayout),
                 userId: userId,
+                categoryId: null, // Você pode adicionar uma categoria padrão se necessário
             });
-            this.logger.log('Novo layout gerado e salvo no banco de dados');
+            this.logger.log(`Novo layout gerado e salvo no banco de dados com ID: ${newLayout.id}`);
         } catch (error: any) {
             this.logger.error(`Erro ao salvar layout gerado: ${error?.message || 'Erro desconhecido'}`);
         }
@@ -249,6 +250,31 @@ export class RefinementService {
                 throw new Error('Formatos de destino inválidos após desestruturação');
             }
 
+            // NOVO: Salvar o layout original no banco de dados
+            try {
+                // Criar nome descritivo para o layout original
+                const originalLayoutName = `Layout Original - ${currentFormat.name} (${currentFormat.width}x${currentFormat.height})`;
+                const originalLayoutDesc = `Layout original antes do refinamento para outros formatos`;
+                
+                // Salvar o layout original com seus elementos
+                const originalLayoutContent = {
+                    format: currentFormat,
+                    elements: elements
+                };
+                
+                const savedOriginalLayout = await this.layoutService.create({
+                    name: originalLayoutName,
+                    description: originalLayoutDesc,
+                    content: JSON.stringify(originalLayoutContent),
+                    categoryId: null, // Você pode adicionar categoria se necessário
+                });
+                
+                this.logger.log(`✅ Layout original salvo no banco de dados com ID: ${savedOriginalLayout.id}`);
+            } catch (error: any) {
+                this.logger.warn(`⚠️ Erro ao salvar layout original: ${error?.message || 'Erro desconhecido'}`);
+                // Continuamos o processamento mesmo se falhar ao salvar o original
+            }
+
             // Processar formatos em lotes para evitar truncamento da resposta
             const batchSize = 1; // Processar apenas 1 formato por vez para maior confiabilidade
             let allRefinedLayouts: RefinedLayout[] = [];
@@ -358,10 +384,10 @@ export class RefinementService {
                 return { format: targetFormat, elements: adaptedElements };
             });
 
-            // Salvar os layouts refinados no banco de dados - CADA UM SEPARADAMENTE
-            try {
-                // Salvar cada layout como um registro separado no banco de dados
-                for (const layout of refinedLayouts) {
+            // MELHORADO: Salvar os layouts refinados no banco de dados - CADA UM SEPARADAMENTE com tratamento de erros individualizado
+            const savedLayoutIds: number[] = [];
+            for (const layout of refinedLayouts) {
+                try {
                     // Criar nomes descritivos para os layouts
                     const layoutName = `${currentFormat.name} → ${layout.format.name}`;
                     const layoutDesc = `Layout convertido de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
@@ -373,19 +399,24 @@ export class RefinementService {
                     };
                     
                     // Criar um novo registro para cada formato
-                    await this.layoutService.create({
+                    const savedLayout = await this.layoutService.create({
                         name: layoutName,
                         description: layoutDesc,
                         content: JSON.stringify(layoutContent),
+                        categoryId: null, // Você pode adicionar categoria se necessário
                     });
                     
-                    this.logger.log(`Layout para formato ${layout.format.name} (${layout.format.width}x${layout.format.height}) salvo com sucesso`);
+                    savedLayoutIds.push(savedLayout.id);
+                    this.logger.log(`✅ Layout para formato ${layout.format.name} (${layout.format.width}x${layout.format.height}) salvo com ID: ${savedLayout.id}`);
+                } catch (error: any) {
+                    this.logger.warn(`⚠️ Erro ao salvar layout para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
+                    // Continuamos para o próximo formato mesmo se um falhar
                 }
-                
-                this.logger.log(`${refinedLayouts.length} layouts refinados salvos individualmente no banco de dados`);
-            } catch (error: any) {
-                this.logger.warn(`Erro ao salvar layouts refinados: ${error?.message || 'Erro desconhecido'}`);
-                // Continuamos retornando os layouts mesmo se falhar ao salvar
+            }
+            
+            this.logger.log(`🎉 ${savedLayoutIds.length} de ${refinedLayouts.length} layouts refinados salvos no banco de dados`);
+            if (savedLayoutIds.length > 0) {
+                this.logger.log(`IDs dos layouts salvos: ${savedLayoutIds.join(', ')}`);
             }
 
             this.logger.log(`Refinamento concluído com sucesso. Gerados ${refinedLayouts.length} layouts.`);
@@ -491,6 +522,28 @@ export class RefinementService {
             const layoutsJson = this.tryParseJson(aiResponse, targetFormats);
             if (!layoutsJson) {
                 throw new Error('Não foi possível interpretar a resposta da IA.');
+            }
+            
+            // NOVO: Salvar cada layout refinado pelo Perplexity individualmente
+            for (const layout of layoutsJson) {
+                try {
+                    // Criar nomes descritivos para os layouts
+                    const layoutName = `AI: ${currentFormat.name} → ${layout.format.name}`;
+                    const layoutDesc = `Layout refinado pela IA Perplexity de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
+                    
+                    // Salvar o layout com seu formato e elementos
+                    const savedLayout = await this.layoutService.create({
+                        name: layoutName,
+                        description: layoutDesc,
+                        content: JSON.stringify(layout),
+                        categoryId: null, // Você pode adicionar categoria se necessário
+                    });
+                    
+                    this.logger.log(`✅ Layout AI refinado para formato ${layout.format.name} salvo com ID: ${savedLayout.id}`);
+                } catch (error: any) {
+                    this.logger.warn(`⚠️ Erro ao salvar layout AI refinado para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
+                    // Continuamos processando mesmo se falhar ao salvar um layout específico
+                }
             }
             
             return layoutsJson;
