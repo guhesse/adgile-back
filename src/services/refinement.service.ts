@@ -70,13 +70,13 @@ export class RefinementService {
     ) {
         // Log no construtor para confirmar a inicialização do serviço
         this.logger.log('RefinementService inicializado');
-        
+
         // Verificar se as configurações do Perplexity estão disponíveis
         const hasApiKey = !!this.configService.perplexityApiKey;
         const isEnabled = this.configService.usePerplexityAi;
-        
+
         this.logger.log(`Perplexity AI ${isEnabled ? 'habilitado' : 'desabilitado'} (API Key ${hasApiKey ? 'configurada' : 'não configurada'})`);
-        
+
         // Se estiver habilitado mas sem API key, logar aviso
         if (isEnabled && !hasApiKey) {
             this.logger.warn('Perplexity AI está habilitado, mas a API Key não está configurada. Configure a API_KEY no arquivo .env');
@@ -86,29 +86,29 @@ export class RefinementService {
     async generateLayout(prompt: string, userId?: string): Promise<any> {
         // Primeiro verificamos se já existe um layout similar no banco de dados
         const existingLayouts = await this.layoutService.findAll();
-        
+
         this.logger.log(`Buscando layouts similares ao prompt: '${prompt.substring(0, 50)}...'`);
-        
+
         // Aqui implementamos uma lógica simples para verificar se já existe um layout similar
         const similarLayout = this.findSimilarLayout(existingLayouts, prompt);
         if (similarLayout) {
             this.logger.log(`Layout similar encontrado: ${similarLayout.name} (ID: ${similarLayout.id})`);
-            
+
             // Parse do conteúdo JSON
             try {
-                const content = typeof similarLayout.content === 'string' 
-                    ? JSON.parse(similarLayout.content) 
+                const content = typeof similarLayout.content === 'string'
+                    ? JSON.parse(similarLayout.content)
                     : similarLayout.content;
                 return content;
             } catch (error: any) {
                 this.logger.error(`Erro ao fazer parse do conteúdo do layout: ${error?.message || 'Erro desconhecido'}`);
             }
         }
-        
+
         // Se não encontrar, gera um novo layout usando a IA
         this.logger.log('Nenhum layout similar encontrado. Gerando novo layout com IA...');
         const generatedLayout = await this.callAIService(prompt);
-        
+
         // Salva o novo layout no banco de dados
         try {
             const newLayout = await this.layoutService.create({
@@ -122,7 +122,7 @@ export class RefinementService {
         } catch (error: any) {
             this.logger.error(`Erro ao salvar layout gerado: ${error?.message || 'Erro desconhecido'}`);
         }
-        
+
         return generatedLayout;
     }
 
@@ -131,43 +131,43 @@ export class RefinementService {
         // Converte prompt para minúsculas para comparação
         const normalizedPrompt = prompt.toLowerCase();
         const keywords = normalizedPrompt.split(/\s+/).filter(word => word.length > 3);
-        
+
         // Não prosseguir se não houver palavras-chave significativas
         if (keywords.length === 0) return null;
-        
+
         // Pontuar cada layout com base na presença de palavras-chave no nome ou descrição
         let bestMatch = null;
         let highestScore = 0;
-        
+
         for (const layout of layouts) {
             const layoutName = (layout.name || '').toLowerCase();
             const layoutDesc = (layout.description || '').toLowerCase();
             const combinedText = `${layoutName} ${layoutDesc}`;
-            
+
             let score = 0;
             for (const keyword of keywords) {
                 if (combinedText.includes(keyword)) {
                     score += 1;
                 }
             }
-            
+
             // Normalizar score pela quantidade de palavras-chave
             const normalizedScore = score / keywords.length;
-            
+
             // Considerar um match se tiver pelo menos 50% das palavras-chave
             if (normalizedScore > 0.5 && normalizedScore > highestScore) {
                 highestScore = normalizedScore;
                 bestMatch = layout;
             }
         }
-        
+
         return bestMatch;
     }
 
     private async callAIService(prompt: string): Promise<any> {
         // Implementação mock para gerar um layout básico
         this.logger.log('Gerando layout mock (substituir por chamada real à API de IA)');
-        
+
         // Layout básico para teste
         return {
             format: {
@@ -255,20 +255,20 @@ export class RefinementService {
                 // Criar nome descritivo para o layout original
                 const originalLayoutName = `Layout Original - ${currentFormat.name} (${currentFormat.width}x${currentFormat.height})`;
                 const originalLayoutDesc = `Layout original antes do refinamento para outros formatos`;
-                
+
                 // Salvar o layout original com seus elementos
                 const originalLayoutContent = {
                     format: currentFormat,
                     elements: elements
                 };
-                
+
                 const savedOriginalLayout = await this.layoutService.create({
                     name: originalLayoutName,
                     description: originalLayoutDesc,
                     content: JSON.stringify(originalLayoutContent),
                     categoryId: null, // Você pode adicionar categoria se necessário
                 });
-                
+
                 this.logger.log(`✅ Layout original salvo no banco de dados com ID: ${savedOriginalLayout.id}`);
             } catch (error: any) {
                 this.logger.warn(`⚠️ Erro ao salvar layout original: ${error?.message || 'Erro desconhecido'}`);
@@ -278,90 +278,90 @@ export class RefinementService {
             // Processar formatos em lotes para evitar truncamento da resposta
             const batchSize = 1; // Processar apenas 1 formato por vez para maior confiabilidade
             let allRefinedLayouts: RefinedLayout[] = [];
-            
+
             // Verificar se devemos usar o Perplexity AI
             const apiKey = this.configService.perplexityApiKey;
             const useAI = this.configService.usePerplexityAi;
-            
+
             if (useAI && apiKey) {
                 this.logger.log('🧠 Tentando usar o Perplexity AI para refinamento avançado');
-                
+
                 // Criar um array para rastrear formatos processados com sucesso
                 const processedFormats = new Set<string>();
-                
+
                 // Dividir os formatos em lotes
                 for (let i = 0; i < targetFormats.length; i += batchSize) {
                     // Obter o lote atual de formatos
                     const formatsBatch = targetFormats.slice(i, i + batchSize);
                     const formatNames = formatsBatch.map(f => f.name).join(', ');
                     this.logger.log(`Processando lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(targetFormats.length / batchSize)} com formatos: ${formatNames}`);
-                    
+
                     try {
                         // Processar este lote de formatos
                         const batchLayouts = await this.refineLayoutWithPerplexity(
-                            currentFormat, 
+                            currentFormat,
                             elements, // Enviar todos os elementos, sem limitação
                             formatsBatch
                         );
-                        
+
                         // Adicionar os layouts refinados ao resultado final
                         if (batchLayouts && Array.isArray(batchLayouts)) {
                             // Verificar se recebemos todos os formatos solicitados
                             const receivedFormats = batchLayouts.map(l => l.format.name);
                             this.logger.log(`✅ Formatos recebidos no lote: ${receivedFormats.join(', ')}`);
-                            
+
                             // Adicionar aos layouts refinados
                             allRefinedLayouts = [...allRefinedLayouts, ...batchLayouts];
-                            
+
                             // Registrar formatos processados com sucesso
                             batchLayouts.forEach(layout => {
                                 processedFormats.add(layout.format.name);
                             });
-                            
+
                             this.logger.log(`✅ Lote processado com sucesso. ${batchLayouts.length} layouts adicionados: ${batchLayouts.map(l => l.format.name).join(', ')}`);
                         }
                     } catch (batchError: unknown) {
-                        const errorMessage = batchError instanceof Error 
-                            ? batchError.message 
+                        const errorMessage = batchError instanceof Error
+                            ? batchError.message
                             : 'Erro desconhecido';
                         this.logger.error(`❌ Erro ao processar lote de formatos com Perplexity: ${errorMessage}`);
-                        
+
                         // Para este lote específico, usamos o método baseado em regras
                         this.logger.log(`Usando método baseado em regras para o lote atual de ${formatsBatch.length} formatos: ${formatNames}`);
                         const fallbackLayouts = formatsBatch.map((targetFormat: BannerSize) => {
-                            const adaptedElements = elements.map((element: EditorElement) => 
+                            const adaptedElements = elements.map((element: EditorElement) =>
                                 this.adaptElementToNewFormat(element, currentFormat, targetFormat)
                             );
                             return { format: targetFormat, elements: adaptedElements };
                         });
-                        
+
                         allRefinedLayouts = [...allRefinedLayouts, ...fallbackLayouts];
-                        
+
                         // Registrar formatos processados com fallback
                         formatsBatch.forEach(format => {
                             processedFormats.add(format.name);
                         });
                     }
                 }
-                
+
                 // Verificar se todos os formatos solicitados foram processados
                 const missingFormats = targetFormats.filter(format => !processedFormats.has(format.name));
-                
+
                 if (missingFormats.length > 0) {
                     this.logger.warn(`⚠️ Alguns formatos não foram processados: ${missingFormats.map(f => f.name).join(', ')}`);
-                    
+
                     // Processar os formatos faltantes com o método baseado em regras
                     this.logger.log(`Aplicando método baseado em regras para ${missingFormats.length} formatos faltantes`);
                     const missingLayouts = missingFormats.map((targetFormat: BannerSize) => {
-                        const adaptedElements = elements.map((element: EditorElement) => 
+                        const adaptedElements = elements.map((element: EditorElement) =>
                             this.adaptElementToNewFormat(element, currentFormat, targetFormat)
                         );
                         return { format: targetFormat, elements: adaptedElements };
                     });
-                    
+
                     allRefinedLayouts = [...allRefinedLayouts, ...missingLayouts];
                 }
-                
+
                 if (allRefinedLayouts.length > 0) {
                     this.logger.log(`🎉 Refinamento concluído. Total de ${allRefinedLayouts.length} layouts gerados de ${targetFormats.length} solicitados.`);
                     return allRefinedLayouts;
@@ -376,9 +376,9 @@ export class RefinementService {
 
             // Método padrão baseado em regras (sem IA) - usado como fallback completo
             this.logger.log('Utilizando refinamento baseado em regras (sem IA) para todos os formatos');
-            
+
             const refinedLayouts = targetFormats.map((targetFormat: BannerSize) => {
-                const adaptedElements = elements.map((element: EditorElement) => 
+                const adaptedElements = elements.map((element: EditorElement) =>
                     this.adaptElementToNewFormat(element, currentFormat, targetFormat)
                 );
                 return { format: targetFormat, elements: adaptedElements };
@@ -391,13 +391,13 @@ export class RefinementService {
                     // Criar nomes descritivos para os layouts
                     const layoutName = `${currentFormat.name} → ${layout.format.name}`;
                     const layoutDesc = `Layout convertido de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
-                    
+
                     // Salvar apenas o layout atual com seu formato e elementos
                     const layoutContent = {
                         format: layout.format,
                         elements: layout.elements
                     };
-                    
+
                     // Criar um novo registro para cada formato
                     const savedLayout = await this.layoutService.create({
                         name: layoutName,
@@ -405,7 +405,7 @@ export class RefinementService {
                         content: JSON.stringify(layoutContent),
                         categoryId: null, // Você pode adicionar categoria se necessário
                     });
-                    
+
                     savedLayoutIds.push(savedLayout.id);
                     this.logger.log(`✅ Layout para formato ${layout.format.name} (${layout.format.width}x${layout.format.height}) salvo com ID: ${savedLayout.id}`);
                 } catch (error: any) {
@@ -413,7 +413,7 @@ export class RefinementService {
                     // Continuamos para o próximo formato mesmo se um falhar
                 }
             }
-            
+
             this.logger.log(`🎉 ${savedLayoutIds.length} de ${refinedLayouts.length} layouts refinados salvos no banco de dados`);
             if (savedLayoutIds.length > 0) {
                 this.logger.log(`IDs dos layouts salvos: ${savedLayoutIds.join(', ')}`);
@@ -432,26 +432,26 @@ export class RefinementService {
      * Refina layouts usando a IA do Perplexity
      */
     private async refineLayoutWithPerplexity(
-        currentFormat: BannerSize, 
-        elements: EditorElement[], 
+        currentFormat: BannerSize,
+        elements: EditorElement[],
         targetFormats: BannerSize[]
     ): Promise<RefinedLayout[]> {
         this.logger.log('🔄 Iniciando chamada à API do Perplexity');
-        
+
         try {
             // Preparar prompt para o Perplexity
             const prompt = this.preparePerplexityPrompt(currentFormat, elements, targetFormats);
             this.logger.debug(`Prompt gerado para Perplexity: ${prompt.substring(0, 100)}...`);
-            
+
             // Log detalhado da requisição que será enviada
             this.logger.log(`Enviando requisição para https://api.perplexity.ai/chat/completions com modelo sonar-pro`);
-            
+
             // Verificar se a API key está definida
             const apiKey = this.configService.perplexityApiKey;
             if (!apiKey) {
                 throw new Error('API Key do Perplexity não está configurada');
             }
-            
+
             // Dados da requisição para facilitar debug
             const requestBody = {
                 model: 'sonar-pro',
@@ -468,7 +468,7 @@ export class RefinementService {
                 ],
                 max_tokens: 4000
             };
-            
+
             // Fazer a chamada à API do Perplexity
             const startTime = Date.now();
             const response = await firstValueFrom(
@@ -486,7 +486,7 @@ export class RefinementService {
                     catchError((error) => {
                         // Logar detalhes do erro
                         this.logger.error(`⚠️ Erro HTTP ao chamar a API do Perplexity: ${error.message}`);
-                        
+
                         if (error.response) {
                             // Servidor retornou um erro com status
                             this.logger.error(`Response status: ${error.response.status}`);
@@ -503,34 +503,34 @@ export class RefinementService {
                     })
                 )
             );
-            
+
             const requestTime = Date.now() - startTime;
             this.logger.log(`✅ Resposta do Perplexity recebida em ${requestTime}ms`);
-            
+
             // Verificar se a resposta contém os campos esperados
             if (!response.data || !response.data.choices || !response.data.choices[0]) {
                 this.logger.error('Resposta da API do Perplexity não contém os campos esperados');
                 this.logger.debug(`Resposta: ${JSON.stringify(response.data)}`);
                 throw new Error('Resposta da API do Perplexity está em formato inválido');
             }
-            
+
             // Processar resposta do Perplexity
             const aiResponse = response.data.choices[0].message.content;
             this.logger.log(`Resposta do Perplexity recebida: ${aiResponse.substring(0, 100)}...`);
-            
+
             // Processar JSON da resposta
             const layoutsJson = this.tryParseJson(aiResponse, targetFormats);
             if (!layoutsJson) {
                 throw new Error('Não foi possível interpretar a resposta da IA.');
             }
-            
+
             // NOVO: Salvar cada layout refinado pelo Perplexity individualmente
             for (const layout of layoutsJson) {
                 try {
                     // Criar nomes descritivos para os layouts
                     const layoutName = `AI: ${currentFormat.name} → ${layout.format.name}`;
                     const layoutDesc = `Layout refinado pela IA Perplexity de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
-                    
+
                     // Salvar o layout com seu formato e elementos
                     const savedLayout = await this.layoutService.create({
                         name: layoutName,
@@ -538,24 +538,24 @@ export class RefinementService {
                         content: JSON.stringify(layout),
                         categoryId: null, // Você pode adicionar categoria se necessário
                     });
-                    
+
                     this.logger.log(`✅ Layout AI refinado para formato ${layout.format.name} salvo com ID: ${savedLayout.id}`);
                 } catch (error: any) {
                     this.logger.warn(`⚠️ Erro ao salvar layout AI refinado para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
                     // Continuamos processando mesmo se falhar ao salvar um layout específico
                 }
             }
-            
+
             return layoutsJson;
         } catch (error: unknown) {
-            const errorMessage = error instanceof Error 
-                ? error.message 
+            const errorMessage = error instanceof Error
+                ? error.message
                 : 'Erro desconhecido';
             this.logger.error(`❌ Erro ao usar Perplexity: ${errorMessage}`);
             throw new Error(`Falha ao refinar com Perplexity: ${errorMessage}`);
         }
     }
-    
+
     /**
      * Prepara o prompt para enviar ao Perplexity
      */
@@ -653,7 +653,7 @@ export class RefinementService {
         if (element.type === 'text') {
             // Para textos, usar uma escala mais conservadora para evitar exageros
             const textScaleFactor = smallerRatio * 0.95; // Ligeira redução para evitar textos grandes demais
-            
+
             // Adaptar posição mantendo alinhamentos
             if (element.style.x <= 10) {
                 // Se estiver próximo à borda esquerda, manter colado
@@ -665,13 +665,13 @@ export class RefinementService {
                 // Caso contrário, manter proporção
                 adaptedElement.style.x = Math.max(0, element.style.x * widthRatio);
             }
-            
+
             // Ajustar altura vertical com cuidado para não sobrepor
             adaptedElement.style.y = Math.max(0, element.style.y * heightRatio);
-            
+
             // Ajustar largura, mas garantir um mínimo legível
             adaptedElement.style.width = Math.max(100, element.style.width * widthRatio);
-            
+
             // Altura pode ser ajustada mais livremente para textos
             adaptedElement.style.height = Math.max(20, element.style.height * textScaleFactor);
 
@@ -680,53 +680,53 @@ export class RefinementService {
                 // Para formatos pequenos, evitar fontes muito pequenas
                 const minFontSize = 14; // Garantir legibilidade mínima
                 const maxFontSize = 72; // Limite superior para evitar textos gigantes
-                
+
                 // Escala mais suave para o texto
                 const fontSize = element.style.fontSize * textScaleFactor;
-                
+
                 // Aplicar limites
                 adaptedElement.style.fontSize = Math.max(minFontSize, Math.min(maxFontSize, fontSize));
-                
+
                 // Para elementos com nomes específicos como títulos ou cabeçalhos, ajustar valores customizados
                 if (element.id.toLowerCase().includes('title') || element.id.toLowerCase().includes('header')) {
                     // Títulos/cabeçalhos podem ter fontes maiores
                     adaptedElement.style.fontSize = Math.max(18, adaptedElement.style.fontSize);
                 }
-                
+
                 // Para textos menores como rodapés ou descrições
                 if (element.id.toLowerCase().includes('footer') || element.id.toLowerCase().includes('description')) {
                     // Garantir que não fiquem muito grandes
                     adaptedElement.style.fontSize = Math.min(adaptedElement.style.fontSize, 16);
                 }
             }
-            
+
             // Manter o alinhamento do texto
             adaptedElement.style.alignment = element.style.alignment;
         }
         else if (element.type === 'image') {
             // Imagens: manter proporção e preservar alinhamento com as bordas
             const aspectRatio = element.style.width / element.style.height;
-            
+
             // Detectar se a imagem está colada em alguma borda no layout original
             const isStickingToLeftBorder = element.style.x <= 5;  // Tolerância de 5px
             const isStickingToRightBorder = element.style.x + element.style.width >= currentFormat.width - 5;
             const isStickingToTopBorder = element.style.y <= 5;
             const isStickingToBottomBorder = element.style.y + element.style.height >= currentFormat.height - 5;
-            
+
             // Identificar se a imagem é provavelmente um logo ou banner principal
-            const isLogo = element.id.toLowerCase().includes('logo') || 
-                          (element.style.width < currentFormat.width * 0.3 && 
-                           element.style.height < currentFormat.height * 0.2);
-            
-            const isBanner = element.style.width >= currentFormat.width * 0.9 || 
-                            element.style.height >= currentFormat.height * 0.3;
-            
+            const isLogo = element.id.toLowerCase().includes('logo') ||
+                (element.style.width < currentFormat.width * 0.3 &&
+                    element.style.height < currentFormat.height * 0.2);
+
+            const isBanner = element.style.width >= currentFormat.width * 0.9 ||
+                element.style.height >= currentFormat.height * 0.3;
+
             if (isLogo) {
                 // Logos devem manter tamanho relativo e posição
                 const logoScale = smallerRatio * 0.9; // Leve redução para logos
                 adaptedElement.style.width = element.style.width * logoScale;
                 adaptedElement.style.height = element.style.height * logoScale;
-                
+
                 // Manter posicionamento relativo do logo
                 if (isStickingToLeftBorder && isStickingToTopBorder) {
                     // Logo no canto superior esquerdo
@@ -789,29 +789,29 @@ export class RefinementService {
                     // Limitado pela largura
                     const newWidth = Math.min(targetFormat.width * 0.9, element.style.width * widthRatio);
                     const newHeight = newWidth / aspectRatio;
-                    
+
                     adaptedElement.style.width = newWidth;
                     adaptedElement.style.height = newHeight;
                 } else {
                     // Limitado pela altura
                     const newHeight = Math.min(targetFormat.height * 0.7, element.style.height * heightRatio);
                     const newWidth = newHeight * aspectRatio;
-                    
+
                     adaptedElement.style.height = newHeight;
                     adaptedElement.style.width = newWidth;
                 }
-                
+
                 // Preservar posicionamento relativo
                 const relativeX = element.style.x / currentFormat.width;
                 const relativeY = element.style.y / currentFormat.height;
                 adaptedElement.style.x = relativeX * targetFormat.width;
                 adaptedElement.style.y = relativeY * targetFormat.height;
-                
+
                 // Garantir que a imagem não ultrapasse os limites do canvas
                 if (adaptedElement.style.x + adaptedElement.style.width > targetFormat.width) {
                     adaptedElement.style.x = Math.max(0, targetFormat.width - adaptedElement.style.width);
                 }
-                
+
                 if (adaptedElement.style.y + adaptedElement.style.height > targetFormat.height) {
                     adaptedElement.style.y = Math.max(0, targetFormat.height - adaptedElement.style.height);
                 }
@@ -869,7 +869,7 @@ export class RefinementService {
                     // Ignorar erro e continuar
                 }
             }
-            
+
             // Tentar encontrar e extrair array diretamente
             const arrayMatch = jsonString.match(/\[\s*\{\s*"format"/s);
             if (arrayMatch) {
@@ -877,17 +877,17 @@ export class RefinementService {
                 if (startIndex !== -1) {
                     let depth = 0;
                     let endIndex = startIndex;
-                    
+
                     for (let i = startIndex; i < jsonString.length; i++) {
                         if (jsonString[i] === '[') depth++;
                         else if (jsonString[i] === ']') depth--;
-                        
+
                         if (depth === 0) {
                             endIndex = i + 1;
                             break;
                         }
                     }
-                    
+
                     if (endIndex > startIndex) {
                         const jsonStr = jsonString.substring(startIndex, endIndex);
                         try {
@@ -898,18 +898,18 @@ export class RefinementService {
                     }
                 }
             }
-            
+
             // Tentar parse direto
             try {
                 const parsed = JSON.parse(jsonString);
-                
+
                 // Normalizar para array se for objeto
                 if (!Array.isArray(parsed)) {
                     // Se é um objeto de layout válido
                     if (parsed && typeof parsed === 'object' && 'format' in parsed && 'elements' in parsed) {
-                        return [parsed]; 
+                        return [parsed];
                     }
-                    
+
                     // Se contém array em alguma propriedade
                     for (const key in parsed) {
                         const value = parsed[key];
@@ -917,11 +917,11 @@ export class RefinementService {
                             return value;
                         }
                     }
-                    
+
                     // Tentar extrair layouts de objetos aninhados
                     const layoutsArray: RefinedLayout[] = [];
                     const targetFormatNames = targetFormats.map(f => f.name);
-                    
+
                     for (const key in parsed) {
                         const item = parsed[key];
                         if (item && typeof item === 'object') {
@@ -936,12 +936,12 @@ export class RefinementService {
                             }
                         }
                     }
-                    
+
                     if (layoutsArray.length > 0) {
                         return layoutsArray;
                     }
                 }
-                
+
                 return parsed;
             } catch (e) {
                 // Falha em todas as tentativas
@@ -956,25 +956,25 @@ export class RefinementService {
     private tryFixJsonStructure(jsonString: string): string {
         // Implementar correções comuns de estrutura JSON
         let fixedJson = jsonString;
-        
+
         // Corrigir vírgulas extras antes de fechar objetos ou arrays
         fixedJson = fixedJson.replace(/,(\s*[}\]])/g, '$1');
-        
+
         // Corrigir propriedades sem aspas (comum nas respostas da IA)
         fixedJson = fixedJson.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3');
-        
+
         // Corrigir valores numéricos com vírgula em vez de ponto (ptBR)
         fixedJson = fixedJson.replace(/"([^"]+)":\s*"(\d+),(\d+)"/g, '"$1": $2.$3');
-        
+
         // Adicionar aspas em valores que deveriam ser strings mas estão sem aspas
         fixedJson = fixedJson.replace(/:\s*([a-zA-Z][a-zA-Z0-9_\s]+)([,}\]])/g, ': "$1"$2');
-        
+
         // Remover aspas extras em valores numéricos
         fixedJson = fixedJson.replace(/"([^"]+)":\s*"(\d+(\.\d+)?)"([,}\]])/g, '"$1": $2$4');
-        
+
         // Remover campos undefined ou null para evitar erros
         fixedJson = fixedJson.replace(/"[^"]+": (undefined|null),?/g, '');
-        
+
         return fixedJson;
     }
 }
