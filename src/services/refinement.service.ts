@@ -3,7 +3,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { LayoutService } from './layout.service';
-import { ConfigurationService } from '../config/configuration.service';
+import { ConfigService } from '@nestjs/config'; // Alterado de ConfigurationService para ConfigService
 
 // Interfaces para tipagem
 interface BannerSize {
@@ -66,14 +66,14 @@ export class RefinementService {
     constructor(
         private readonly httpService: HttpService,
         private readonly layoutService: LayoutService,
-        private readonly configService: ConfigurationService
+        private readonly configService: ConfigService, // Alterado de configurationService para configService
     ) {
         // Log no construtor para confirmar a inicialização do serviço
         this.logger.log('RefinementService inicializado');
 
         // Verificar se as configurações do Perplexity estão disponíveis
-        const hasApiKey = !!this.configService.perplexityApiKey;
-        const isEnabled = this.configService.usePerplexityAi;
+        const hasApiKey = !!this.configService.get<string>('PERPLEXITY_API_KEY');
+        const isEnabled = this.configService.get<boolean>('USE_PERPLEXITY_AI');
 
         this.logger.log(`Perplexity AI ${isEnabled ? 'habilitado' : 'desabilitado'} (API Key ${hasApiKey ? 'configurada' : 'não configurada'})`);
 
@@ -280,8 +280,8 @@ export class RefinementService {
             let allRefinedLayouts: RefinedLayout[] = [];
 
             // Verificar se devemos usar o Perplexity AI
-            const apiKey = this.configService.perplexityApiKey;
-            const useAI = this.configService.usePerplexityAi;
+            const apiKey = this.configService.get<string>('PERPLEXITY_API_KEY');
+            const useAI = this.configService.get<boolean>('USE_PERPLEXITY_AI');
 
             if (useAI && apiKey) {
                 this.logger.log('🧠 Tentando usar o Perplexity AI para refinamento avançado');
@@ -447,7 +447,7 @@ export class RefinementService {
             this.logger.log(`Enviando requisição para https://api.perplexity.ai/chat/completions com modelo sonar-pro`);
 
             // Verificar se a API key está definida
-            const apiKey = this.configService.perplexityApiKey;
+            const apiKey = this.configService.get<string>('PERPLEXITY_API_KEY');
             if (!apiKey) {
                 throw new Error('API Key do Perplexity não está configurada');
             }

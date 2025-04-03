@@ -6,6 +6,8 @@ import { LayoutService } from './services/layout.service';
 import { RefinementService } from './services/refinement.service';
 import { PrismaService } from './database/prisma.service';
 import { ConfigModule } from './config/config.module';
+import { CdnController } from './controllers/cdn.controller';
+import { BunnyCdnService } from './services/bunnycdn.service';
 
 @Module({
   imports: [
@@ -17,12 +19,14 @@ import { ConfigModule } from './config/config.module';
   ],
   controllers: [
     LayoutController,
-    RefinementController
+    RefinementController,
+    CdnController
   ],
   providers: [
     LayoutService,
     RefinementService,
-    PrismaService
+    PrismaService,
+    BunnyCdnService
   ],
 })
 export class AppModule {}
