@@ -1,63 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
-import { catchError } from 'rxjs/operators';
+import { ConfigService } from '@nestjs/config';
 import { LayoutService } from './layout.service';
-import { ConfigService } from '@nestjs/config'; // Alterado de ConfigurationService para ConfigService
-
-// Interfaces para tipagem
-interface BannerSize {
-    name: string;
-    width: number;
-    height: number;
-    orientation?: 'vertical' | 'horizontal' | 'square';
-}
-
-interface ElementStyle {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    fontSize?: number;
-    xPercent?: number;
-    yPercent?: number;
-    widthPercent?: number;
-    heightPercent?: number;
-    [key: string]: any; // Para outras propriedades de estilo
-}
-
-interface EditorElement {
-    id: string;
-    type: string;
-    content: string;
-    style: ElementStyle;
-    sizeId?: string;
-    originalId?: string;
-    columns?: any;
-    [key: string]: any; // Para outras propriedades do elemento
-}
-
-interface LayoutData {
-    currentFormat: BannerSize;
-    elements: EditorElement[];
-    targetFormats: BannerSize[];
-}
-
-export interface RefinedLayout {
-    format: BannerSize;
-    elements: EditorElement[];
-}
-
-// Define a interface para a resposta da API Perplexity
-interface PerplexityResponse {
-    data: {
-        choices: Array<{
-            message: {
-                content: string;
-            };
-        }>;
-    };
-}
+import { PerplexityService } from './perplexity.service';
+import { LayoutAdapterUtils } from '../utils/layout-adapter.utils';
+import { 
+    BannerSize, 
+    EditorElement, 
+    LayoutData, 
+    RefinedLayout 
+} from '../interfaces/layout.interface';
 
 @Injectable()
 export class RefinementService {
@@ -66,30 +18,18 @@ export class RefinementService {
     constructor(
         private readonly httpService: HttpService,
         private readonly layoutService: LayoutService,
-        private readonly configService: ConfigService, // Alterado de configurationService para configService
+        private readonly configService: ConfigService,
+        private readonly perplexityService: PerplexityService
     ) {
-        // Log no construtor para confirmar a inicialização do serviço
         this.logger.log('RefinementService inicializado');
-
-        // Verificar se as configurações do Perplexity estão disponíveis
-        const hasApiKey = !!this.configService.get<string>('PERPLEXITY_API_KEY');
-        const isEnabled = this.configService.get<boolean>('USE_PERPLEXITY_AI');
-
-        this.logger.log(`Perplexity AI ${isEnabled ? 'habilitado' : 'desabilitado'} (API Key ${hasApiKey ? 'configurada' : 'não configurada'})`);
-
-        // Se estiver habilitado mas sem API key, logar aviso
-        if (isEnabled && !hasApiKey) {
-            this.logger.warn('Perplexity AI está habilitado, mas a API Key não está configurada. Configure a API_KEY no arquivo .env');
-        }
     }
 
     async generateLayout(prompt: string, userId?: string): Promise<any> {
         // Primeiro verificamos se já existe um layout similar no banco de dados
         const existingLayouts = await this.layoutService.findAll();
-
         this.logger.log(`Buscando layouts similares ao prompt: '${prompt.substring(0, 50)}...'`);
 
-        // Aqui implementamos uma lógica simples para verificar se já existe um layout similar
+        // Verificar se já existe um layout similar
         const similarLayout = this.findSimilarLayout(existingLayouts, prompt);
         if (similarLayout) {
             this.logger.log(`Layout similar encontrado: ${similarLayout.name} (ID: ${similarLayout.id})`);
@@ -116,7 +56,7 @@ export class RefinementService {
                 description: prompt,
                 content: JSON.stringify(generatedLayout),
                 userId: userId,
-                categoryId: null, // Você pode adicionar uma categoria padrão se necessário
+                categoryId: null,
             });
             this.logger.log(`Novo layout gerado e salvo no banco de dados com ID: ${newLayout.id}`);
         } catch (error: any) {
@@ -128,14 +68,11 @@ export class RefinementService {
 
     private findSimilarLayout(layouts: any[], prompt: string): any {
         // Implementação básica para encontrar layouts similares
-        // Converte prompt para minúsculas para comparação
         const normalizedPrompt = prompt.toLowerCase();
         const keywords = normalizedPrompt.split(/\s+/).filter(word => word.length > 3);
 
-        // Não prosseguir se não houver palavras-chave significativas
         if (keywords.length === 0) return null;
 
-        // Pontuar cada layout com base na presença de palavras-chave no nome ou descrição
         let bestMatch = null;
         let highestScore = 0;
 
@@ -224,7 +161,7 @@ export class RefinementService {
 
     async refineLayout(layoutData: LayoutData): Promise<RefinedLayout[]> {
         try {
-            // Verificação adicional para garantir que layoutData não seja undefined
+            // Verificação para garantir que layoutData não seja undefined
             if (!layoutData) {
                 this.logger.error('layoutData está undefined');
                 throw new Error('Dados do layout não fornecidos');
@@ -237,189 +174,59 @@ export class RefinementService {
 
             const { currentFormat, elements, targetFormats } = layoutData;
 
-            // Verificações adicionais após a desestruturação
-            if (!currentFormat) {
-                throw new Error('Formato atual não definido após desestruturação');
-            }
+            // Verificações adicionais
+            if (!currentFormat) throw new Error('Formato atual não definido');
+            if (!elements || !Array.isArray(elements)) throw new Error('Elementos do layout inválidos');
+            if (!targetFormats || !Array.isArray(targetFormats)) throw new Error('Formatos de destino inválidos');
 
-            if (!elements || !Array.isArray(elements)) {
-                throw new Error('Elementos do layout inválidos após desestruturação');
-            }
+            // Salvar o layout original no banco de dados
+            await this.saveOriginalLayout(currentFormat, elements);
 
-            if (!targetFormats || !Array.isArray(targetFormats)) {
-                throw new Error('Formatos de destino inválidos após desestruturação');
-            }
+            // Verificar se devemos usar a IA
+            if (this.perplexityService.isAIEnabled()) {
+                this.logger.log('🔄 Tentando usar a IA para refinamento');
+                const batchSize = 2; // Processar lotes de 2 em 2
+                const refinedLayouts: RefinedLayout[] = [];
 
-            // NOVO: Salvar o layout original no banco de dados
-            try {
-                // Criar nome descritivo para o layout original
-                const originalLayoutName = `Layout Original - ${currentFormat.name} (${currentFormat.width}x${currentFormat.height})`;
-                const originalLayoutDesc = `Layout original antes do refinamento para outros formatos`;
-
-                // Salvar o layout original com seus elementos
-                const originalLayoutContent = {
-                    format: currentFormat,
-                    elements: elements
-                };
-
-                const savedOriginalLayout = await this.layoutService.create({
-                    name: originalLayoutName,
-                    description: originalLayoutDesc,
-                    content: JSON.stringify(originalLayoutContent),
-                    categoryId: null, // Você pode adicionar categoria se necessário
-                });
-
-                this.logger.log(`✅ Layout original salvo no banco de dados com ID: ${savedOriginalLayout.id}`);
-            } catch (error: any) {
-                this.logger.warn(`⚠️ Erro ao salvar layout original: ${error?.message || 'Erro desconhecido'}`);
-                // Continuamos o processamento mesmo se falhar ao salvar o original
-            }
-
-            // Processar formatos em lotes para evitar truncamento da resposta
-            const batchSize = 1; // Processar apenas 1 formato por vez para maior confiabilidade
-            let allRefinedLayouts: RefinedLayout[] = [];
-
-            // Verificar se devemos usar o Perplexity AI
-            const apiKey = this.configService.get<string>('PERPLEXITY_API_KEY');
-            const useAI = this.configService.get<boolean>('USE_PERPLEXITY_AI');
-
-            if (useAI && apiKey) {
-                this.logger.log('🧠 Tentando usar o Perplexity AI para refinamento avançado');
-
-                // Criar um array para rastrear formatos processados com sucesso
-                const processedFormats = new Set<string>();
-
-                // Dividir os formatos em lotes
-                for (let i = 0; i < targetFormats.length; i += batchSize) {
-                    // Obter o lote atual de formatos
-                    const formatsBatch = targetFormats.slice(i, i + batchSize);
-                    const formatNames = formatsBatch.map(f => f.name).join(', ');
-                    this.logger.log(`Processando lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(targetFormats.length / batchSize)} com formatos: ${formatNames}`);
+                for (let i = 0; i < layoutData.targetFormats.length; i += batchSize) {
+                    const batch = layoutData.targetFormats.slice(i, i + batchSize);
+                    this.logger.log(`📦 Processando lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(layoutData.targetFormats.length / batchSize)} com ${batch.length} formatos.`);
 
                     try {
-                        // Processar este lote de formatos
-                        const batchLayouts = await this.refineLayoutWithPerplexity(
-                            currentFormat,
-                            elements, // Enviar todos os elementos, sem limitação
-                            formatsBatch
+                        const batchLayouts = await this.perplexityService.refineLayoutWithPerplexity(
+                            layoutData.currentFormat,
+                            layoutData.elements,
+                            batch
                         );
 
-                        // Adicionar os layouts refinados ao resultado final
                         if (batchLayouts && Array.isArray(batchLayouts)) {
-                            // Verificar se recebemos todos os formatos solicitados
-                            const receivedFormats = batchLayouts.map(l => l.format.name);
-                            this.logger.log(`✅ Formatos recebidos no lote: ${receivedFormats.join(', ')}`);
-
-                            // Adicionar aos layouts refinados
-                            allRefinedLayouts = [...allRefinedLayouts, ...batchLayouts];
-
-                            // Registrar formatos processados com sucesso
-                            batchLayouts.forEach(layout => {
-                                processedFormats.add(layout.format.name);
-                            });
-
-                            this.logger.log(`✅ Lote processado com sucesso. ${batchLayouts.length} layouts adicionados: ${batchLayouts.map(l => l.format.name).join(', ')}`);
+                            refinedLayouts.push(...batchLayouts);
+                            this.logger.log(`✅ Lote processado com sucesso. Formatos: ${batch.map(f => f.name).join(', ')}`);
+                        } else {
+                            this.logger.warn(`⚠️ Nenhum layout válido retornado pela IA para o lote. Usando fallback baseado em regras.`);
+                            refinedLayouts.push(...this.processWithRules(layoutData.currentFormat, layoutData.elements, batch));
                         }
-                    } catch (batchError: unknown) {
-                        const errorMessage = batchError instanceof Error
-                            ? batchError.message
-                            : 'Erro desconhecido';
-                        this.logger.error(`❌ Erro ao processar lote de formatos com Perplexity: ${errorMessage}`);
-
-                        // Para este lote específico, usamos o método baseado em regras
-                        this.logger.log(`Usando método baseado em regras para o lote atual de ${formatsBatch.length} formatos: ${formatNames}`);
-                        const fallbackLayouts = formatsBatch.map((targetFormat: BannerSize) => {
-                            const adaptedElements = elements.map((element: EditorElement) =>
-                                this.adaptElementToNewFormat(element, currentFormat, targetFormat)
-                            );
-                            return { format: targetFormat, elements: adaptedElements };
-                        });
-
-                        allRefinedLayouts = [...allRefinedLayouts, ...fallbackLayouts];
-
-                        // Registrar formatos processados com fallback
-                        formatsBatch.forEach(format => {
-                            processedFormats.add(format.name);
-                        });
+                    } catch (error) {
+                        this.logger.error(`❌ Erro ao processar lote com IA: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+                        this.logger.log(`⚠️ Usando método baseado em regras para o lote atual.`);
+                        refinedLayouts.push(...this.processWithRules(layoutData.currentFormat, layoutData.elements, batch));
                     }
                 }
 
-                // Verificar se todos os formatos solicitados foram processados
-                const missingFormats = targetFormats.filter(format => !processedFormats.has(format.name));
-
-                if (missingFormats.length > 0) {
-                    this.logger.warn(`⚠️ Alguns formatos não foram processados: ${missingFormats.map(f => f.name).join(', ')}`);
-
-                    // Processar os formatos faltantes com o método baseado em regras
-                    this.logger.log(`Aplicando método baseado em regras para ${missingFormats.length} formatos faltantes`);
-                    const missingLayouts = missingFormats.map((targetFormat: BannerSize) => {
-                        const adaptedElements = elements.map((element: EditorElement) =>
-                            this.adaptElementToNewFormat(element, currentFormat, targetFormat)
-                        );
-                        return { format: targetFormat, elements: adaptedElements };
-                    });
-
-                    allRefinedLayouts = [...allRefinedLayouts, ...missingLayouts];
+                if (refinedLayouts.length > 0) {
+                    this.logger.log(`🎉 Refinamento concluído com IA. Total de ${refinedLayouts.length} layouts gerados.`);
+                    await this.saveRefinedLayouts(layoutData.currentFormat, refinedLayouts);
+                    return refinedLayouts;
                 }
 
-                if (allRefinedLayouts.length > 0) {
-                    this.logger.log(`🎉 Refinamento concluído. Total de ${allRefinedLayouts.length} layouts gerados de ${targetFormats.length} solicitados.`);
-                    return allRefinedLayouts;
-                }
+                this.logger.warn('⚠️ Nenhum layout válido retornado pela IA. Usando fallback baseado em regras.');
             } else {
-                if (useAI) {
-                    this.logger.warn('Perplexity AI está habilitado, mas a API Key não está configurada. Usando método baseado em regras.');
-                } else {
-                    this.logger.log('Perplexity AI não está configurado ou está desabilitado.');
-                }
+                this.logger.log('IA desabilitada. Usando adaptação baseada em regras.');
             }
 
-            // Método padrão baseado em regras (sem IA) - usado como fallback completo
-            this.logger.log('Utilizando refinamento baseado em regras (sem IA) para todos os formatos');
-
-            const refinedLayouts = targetFormats.map((targetFormat: BannerSize) => {
-                const adaptedElements = elements.map((element: EditorElement) =>
-                    this.adaptElementToNewFormat(element, currentFormat, targetFormat)
-                );
-                return { format: targetFormat, elements: adaptedElements };
-            });
-
-            // MELHORADO: Salvar os layouts refinados no banco de dados - CADA UM SEPARADAMENTE com tratamento de erros individualizado
-            const savedLayoutIds: number[] = [];
-            for (const layout of refinedLayouts) {
-                try {
-                    // Criar nomes descritivos para os layouts
-                    const layoutName = `${currentFormat.name} → ${layout.format.name}`;
-                    const layoutDesc = `Layout convertido de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
-
-                    // Salvar apenas o layout atual com seu formato e elementos
-                    const layoutContent = {
-                        format: layout.format,
-                        elements: layout.elements
-                    };
-
-                    // Criar um novo registro para cada formato
-                    const savedLayout = await this.layoutService.create({
-                        name: layoutName,
-                        description: layoutDesc,
-                        content: JSON.stringify(layoutContent),
-                        categoryId: null, // Você pode adicionar categoria se necessário
-                    });
-
-                    savedLayoutIds.push(savedLayout.id);
-                    this.logger.log(`✅ Layout para formato ${layout.format.name} (${layout.format.width}x${layout.format.height}) salvo com ID: ${savedLayout.id}`);
-                } catch (error: any) {
-                    this.logger.warn(`⚠️ Erro ao salvar layout para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
-                    // Continuamos para o próximo formato mesmo se um falhar
-                }
-            }
-
-            this.logger.log(`🎉 ${savedLayoutIds.length} de ${refinedLayouts.length} layouts refinados salvos no banco de dados`);
-            if (savedLayoutIds.length > 0) {
-                this.logger.log(`IDs dos layouts salvos: ${savedLayoutIds.join(', ')}`);
-            }
-
-            this.logger.log(`Refinamento concluído com sucesso. Gerados ${refinedLayouts.length} layouts.`);
+            // Fallback para método baseado em regras
+            const refinedLayouts = this.processWithRules(layoutData.currentFormat, layoutData.elements, layoutData.targetFormats);
+            await this.saveRefinedLayouts(layoutData.currentFormat, refinedLayouts);
             return refinedLayouts;
         } catch (error: unknown) {
             this.logger.error(`Erro ao refinar layout: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
@@ -428,553 +235,139 @@ export class RefinementService {
         }
     }
 
-    /**
-     * Refina layouts usando a IA do Perplexity
-     */
-    private async refineLayoutWithPerplexity(
-        currentFormat: BannerSize,
-        elements: EditorElement[],
+    private async saveOriginalLayout(currentFormat: BannerSize, elements: EditorElement[]): Promise<void> {
+        try {
+            const originalLayoutName = `Layout Original - ${currentFormat.name} (${currentFormat.width}x${currentFormat.height})`;
+            const originalLayoutDesc = `Layout original antes do refinamento para outros formatos`;
+            const originalLayoutContent = { format: currentFormat, elements };
+
+            const savedOriginalLayout = await this.layoutService.create({
+                name: originalLayoutName,
+                description: originalLayoutDesc,
+                content: JSON.stringify(originalLayoutContent),
+                categoryId: null,
+            });
+
+            this.logger.log(`✅ Layout original salvo no banco de dados com ID: ${savedOriginalLayout.id}`);
+        } catch (error: any) {
+            this.logger.warn(`⚠️ Erro ao salvar layout original: ${error?.message || 'Erro desconhecido'}`);
+        }
+    }
+
+    private async processWithAI(
+        currentFormat: BannerSize, 
+        elements: EditorElement[], 
         targetFormats: BannerSize[]
     ): Promise<RefinedLayout[]> {
-        this.logger.log('🔄 Iniciando chamada à API do Perplexity');
-
-        try {
-            // Preparar prompt para o Perplexity
-            const prompt = this.preparePerplexityPrompt(currentFormat, elements, targetFormats);
-            this.logger.debug(`Prompt gerado para Perplexity: ${prompt.substring(0, 100)}...`);
-
-            // Log detalhado da requisição que será enviada
-            this.logger.log(`Enviando requisição para https://api.perplexity.ai/chat/completions com modelo sonar-pro`);
-
-            // Verificar se a API key está definida
-            const apiKey = this.configService.get<string>('PERPLEXITY_API_KEY');
-            if (!apiKey) {
-                throw new Error('API Key do Perplexity não está configurada');
-            }
-
-            // Dados da requisição para facilitar debug
-            const requestBody = {
-                model: 'sonar-pro',
-                search_context_size: 'low', // Ajustar para "low" para reduzir custos
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'Você é um especialista em design e layout. Sua tarefa é adaptar elementos visuais de um formato para outro, mantendo a estética e proporção.'
-                    },
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
-                ],
-                max_tokens: 4000
-            };
-
-            // Fazer a chamada à API do Perplexity
-            const startTime = Date.now();
-            const response = await firstValueFrom(
-                this.httpService.post(
-                    'https://api.perplexity.ai/chat/completions',
-                    requestBody,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${apiKey}`,
-                            'Content-Type': 'application/json'
-                        }
-                    }
-                ).pipe(
-                    // Adicionar captura de erros para logar detalhes adicionais
-                    catchError((error) => {
-                        // Logar detalhes do erro
-                        this.logger.error(`⚠️ Erro HTTP ao chamar a API do Perplexity: ${error.message}`);
-
-                        if (error.response) {
-                            // Servidor retornou um erro com status
-                            this.logger.error(`Response status: ${error.response.status}`);
-                            this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
-                            throw new Error(`Erro do servidor Perplexity: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-                        } else if (error.request) {
-                            // Requisição foi feita mas não houve resposta
-                            this.logger.error('Sem resposta do servidor Perplexity');
-                            throw new Error('Sem resposta do servidor Perplexity');
-                        } else {
-                            // Erro de configuração
-                            throw new Error(`Erro de configuração: ${error.message}`);
-                        }
-                    })
-                )
-            );
-
-            const requestTime = Date.now() - startTime;
-            this.logger.log(`✅ Resposta do Perplexity recebida em ${requestTime}ms`);
-
-            // Verificar se a resposta contém os campos esperados
-            if (!response.data || !response.data.choices || !response.data.choices[0]) {
-                this.logger.error('Resposta da API do Perplexity não contém os campos esperados');
-                this.logger.debug(`Resposta: ${JSON.stringify(response.data)}`);
-                throw new Error('Resposta da API do Perplexity está em formato inválido');
-            }
-
-            // Processar resposta do Perplexity
-            const aiResponse = response.data.choices[0].message.content;
-            this.logger.log(`Resposta do Perplexity recebida: ${aiResponse.substring(0, 100)}...`);
-
-            // Processar JSON da resposta
-            const layoutsJson = this.tryParseJson(aiResponse, targetFormats);
-            if (!layoutsJson) {
-                throw new Error('Não foi possível interpretar a resposta da IA.');
-            }
-
-            // NOVO: Salvar cada layout refinado pelo Perplexity individualmente
-            for (const layout of layoutsJson) {
-                try {
-                    // Criar nomes descritivos para os layouts
-                    const layoutName = `AI: ${currentFormat.name} → ${layout.format.name}`;
-                    const layoutDesc = `Layout refinado pela IA Perplexity de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
-
-                    // Salvar o layout com seu formato e elementos
-                    const savedLayout = await this.layoutService.create({
-                        name: layoutName,
-                        description: layoutDesc,
-                        content: JSON.stringify(layout),
-                        categoryId: null, // Você pode adicionar categoria se necessário
-                    });
-
-                    this.logger.log(`✅ Layout AI refinado para formato ${layout.format.name} salvo com ID: ${savedLayout.id}`);
-                } catch (error: any) {
-                    this.logger.warn(`⚠️ Erro ao salvar layout AI refinado para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
-                    // Continuamos processando mesmo se falhar ao salvar um layout específico
-                }
-            }
-
-            return layoutsJson;
-        } catch (error: unknown) {
-            const errorMessage = error instanceof Error
-                ? error.message
-                : 'Erro desconhecido';
-            this.logger.error(`❌ Erro ao usar Perplexity: ${errorMessage}`);
-            throw new Error(`Falha ao refinar com Perplexity: ${errorMessage}`);
-        }
-    }
-
-    /**
-     * Prepara o prompt para enviar ao Perplexity
-     */
-    private preparePerplexityPrompt(
-        currentFormat: BannerSize,
-        elements: EditorElement[],
-        targetFormats: BannerSize[]
-    ): string {
-        return `
-        Preciso adaptar um layout de banner para diferentes formatos, mantendo a aparência profissional e bem ajustada em todos os formatos, com máxima fidelidade ao original.
+        this.logger.log('🧠 Tentando usar o Perplexity AI para refinamento avançado');
         
-        Formato original:
-        ${JSON.stringify(currentFormat)}
+        // Criar um array para rastrear formatos processados com sucesso
+        const processedFormats = new Set<string>();
+        let allRefinedLayouts: RefinedLayout[] = [];
         
-        Elementos do layout original:
-        ${JSON.stringify(elements)}
+        // Processar formatos em lotes 
+        const batchSize = 1;
         
-        Formatos de destino:
-        ${JSON.stringify(targetFormats)}
-        
-        Regras críticas para adaptação:
-        1. ESTRUTURA VISUAL: Preserve a estrutura geral do layout em todos os formatos, mantendo a ordem e disposição relativa dos elementos.
-        2. PROPORÇÃO DOS TEXTOS: Ajuste o tamanho dos textos para garantir legibilidade em qualquer formato. Formatos menores devem ter fontes proporcionalmente menores, mas não inferiores a 10px.
-        3. EVITAR SOBREPOSIÇÃO: Os elementos NÃO devem se sobrepor ou ficar muito próximos um do outro. Mantenha espaçamento adequado entre elementos.
-        4. ESPAÇAMENTO VERTICAL: Distribua elementos verticalmente de forma equilibrada, mantendo proporções de espaçamento consistentes ao layout original.
-        5. MANTER IDENTIDADE VISUAL: Cores, fontes e a aparência geral devem ser mantidas em todos os formatos.
-        6. PRIORIDADES: Se houver conflito de espaço, priorize o elemento de texto principal, seguido de imagens principais, e depois elementos secundários.
-        7. PROPORÇÃO DAS IMAGENS: Preserve a proporção original das imagens para evitar distorções. Não redimensione imagens abaixo de 50% ou acima de 200% do tamanho original.
-        8. ALINHAMENTO: Mantenha alinhamentos consistentes em todos os formatos. Ajuste conforme necessário para manter a harmonia visual.
-        9. POSICIONAMENTO RELATIVO: Mantenha a posição relativa entre elementos (cabeçalho no topo, rodapé embaixo, etc).
-        10. QUEBRA DE TEXTO: Em formatos menores, permita quebras de linha em textos longos, mantendo a legibilidade.
-        11. ELEMENTOS RESPONSIVOS: Alguns elementos podem mudar de tamanho ou posição para melhor se adequar a cada formato.
-        12. CONSISTÊNCIA ENTRE FORMATOS: Garanta que todos os formatos mantenham uma aparência consistente entre si, não apenas em relação ao original.
-        13. TRATAMENTO DE ESPAÇOS VAZIOS: Distribua elementos de forma a evitar grandes espaços vazios em formatos maiores ou aglomerações em formatos menores.
-        14. VERIFICAÇÃO FINAL: Certifique-se de que todos os elementos estejam visíveis, legíveis e bem posicionados em cada formato antes de finalizar.
-        
-        INSTRUÇÕES ESPECÍFICAS DE FORMATO JSON:
-        Sua resposta DEVE ser um array de layouts no formato JSON estritamente válido.
-        
-        [
-          {
-            "format": {...primeiro formato de destino...},
-            "elements": [...elementos adaptados para este formato...]
-          },
-          {
-            "format": {...segundo formato de destino...},
-            "elements": [...elementos adaptados para este formato...]
-          }
-        ]
-        
-        Certifique-se de colocar colchetes [...] ao redor de todos os objetos de layout para formar um array válido.
-        
-        Para cada elemento, mantenha o ID original mas adicione o sufixo do nome do formato (em minúsculas e simplificado), e inclua uma propriedade "originalId" com o ID original.
-        
-        REQUISITOS OBRIGATÓRIOS DE FORMATAÇÃO:
-        1. Para cada "style", NÃO coloque vírgula após a última propriedade de um objeto
-        2. O JSON DEVE ser um array válido e completo com colchetes no início e fim
-        3. Cada propriedade DEVE ter aspas duplas (")
-        4. Todos os elementos devem ter as propriedades: id, type, content, style, sizeId (igual ao nome do formato), originalId
-        5. Não use campos undefined ou null - simplesmente omita propriedades opcionais
-        6. Garanta que o último elemento de cada array e objeto não tenha vírgula no final
-        
-        EXEMPLOS DE ADAPTAÇÕES ESPECÍFICAS:
-        - Para texto: Reduza o tamanho da fonte proporcionalmente em formatos menores, mas mantenha um mínimo de 10px
-        - Para imagens: Mantenha a proporção e redimensione adequadamente, sem ultrapassar 50% de redução ou 200% de aumento
-        - Para logos: Garanta visibilidade mínima adequada, nunca menor que 20px em sua menor dimensão
-        
-        Muito importante: TESTE seu JSON antes de enviar para garantir que é válido e não tem erros de formatação!
-        `;
-    }
+        for (let i = 0; i < targetFormats.length; i += batchSize) {
+            const formatsBatch = targetFormats.slice(i, i + batchSize);
+            const formatNames = formatsBatch.map(f => f.name).join(', ');
+            this.logger.log(`Processando lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(targetFormats.length / batchSize)} com formatos: ${formatNames}`);
 
-    private adaptElementToNewFormat(
-        element: EditorElement,
-        currentFormat: BannerSize,
-        targetFormat: BannerSize
-    ): EditorElement {
-        // Gerar um novo ID para o elemento adaptado
-        const newId = `${element.id}-${targetFormat.name.toLowerCase().replace(/\s+/g, '-')}`;
-
-        // Calcular as proporções entre os formatos
-        const widthRatio = targetFormat.width / currentFormat.width;
-        const heightRatio = targetFormat.height / currentFormat.height;
-        const smallerRatio = Math.min(widthRatio, heightRatio);
-
-        // Aplicar diferentes regras de adaptação com base no tipo de elemento
-        let adaptedElement: EditorElement = {
-            ...element,
-            id: newId,
-            originalId: element.id, // Manter referência para o elemento original
-            sizeId: targetFormat.name,
-            style: { ...element.style }
-        };
-
-        // Diferentes regras para diferentes tipos de elementos
-        if (element.type === 'text') {
-            // Para textos, usar uma escala mais conservadora para evitar exageros
-            const textScaleFactor = smallerRatio * 0.95; // Ligeira redução para evitar textos grandes demais
-
-            // Adaptar posição mantendo alinhamentos
-            if (element.style.x <= 10) {
-                // Se estiver próximo à borda esquerda, manter colado
-                adaptedElement.style.x = element.style.x;
-            } else if (element.style.x + element.style.width >= currentFormat.width - 10) {
-                // Se estiver próximo à borda direita, manter essa relação
-                adaptedElement.style.x = targetFormat.width - (element.style.width * widthRatio);
-            } else {
-                // Caso contrário, manter proporção
-                adaptedElement.style.x = Math.max(0, element.style.x * widthRatio);
-            }
-
-            // Ajustar altura vertical com cuidado para não sobrepor
-            adaptedElement.style.y = Math.max(0, element.style.y * heightRatio);
-
-            // Ajustar largura, mas garantir um mínimo legível
-            adaptedElement.style.width = Math.max(100, element.style.width * widthRatio);
-
-            // Altura pode ser ajustada mais livremente para textos
-            adaptedElement.style.height = Math.max(20, element.style.height * textScaleFactor);
-
-            // Ajustar o tamanho da fonte com escala mais inteligente
-            if (element.style.fontSize) {
-                // Para formatos pequenos, evitar fontes muito pequenas
-                const minFontSize = 14; // Garantir legibilidade mínima
-                const maxFontSize = 72; // Limite superior para evitar textos gigantes
-
-                // Escala mais suave para o texto
-                const fontSize = element.style.fontSize * textScaleFactor;
-
-                // Aplicar limites
-                adaptedElement.style.fontSize = Math.max(minFontSize, Math.min(maxFontSize, fontSize));
-
-                // Para elementos com nomes específicos como títulos ou cabeçalhos, ajustar valores customizados
-                if (element.id.toLowerCase().includes('title') || element.id.toLowerCase().includes('header')) {
-                    // Títulos/cabeçalhos podem ter fontes maiores
-                    adaptedElement.style.fontSize = Math.max(18, adaptedElement.style.fontSize);
-                }
-
-                // Para textos menores como rodapés ou descrições
-                if (element.id.toLowerCase().includes('footer') || element.id.toLowerCase().includes('description')) {
-                    // Garantir que não fiquem muito grandes
-                    adaptedElement.style.fontSize = Math.min(adaptedElement.style.fontSize, 16);
-                }
-            }
-
-            // Manter o alinhamento do texto
-            adaptedElement.style.alignment = element.style.alignment;
-        }
-        else if (element.type === 'image') {
-            // Imagens: manter proporção e preservar alinhamento com as bordas
-            const aspectRatio = element.style.width / element.style.height;
-
-            // Detectar se a imagem está colada em alguma borda no layout original
-            const isStickingToLeftBorder = element.style.x <= 5;  // Tolerância de 5px
-            const isStickingToRightBorder = element.style.x + element.style.width >= currentFormat.width - 5;
-            const isStickingToTopBorder = element.style.y <= 5;
-            const isStickingToBottomBorder = element.style.y + element.style.height >= currentFormat.height - 5;
-
-            // Identificar se a imagem é provavelmente um logo ou banner principal
-            const isLogo = element.id.toLowerCase().includes('logo') ||
-                (element.style.width < currentFormat.width * 0.3 &&
-                    element.style.height < currentFormat.height * 0.2);
-
-            const isBanner = element.style.width >= currentFormat.width * 0.9 ||
-                element.style.height >= currentFormat.height * 0.3;
-
-            if (isLogo) {
-                // Logos devem manter tamanho relativo e posição
-                const logoScale = smallerRatio * 0.9; // Leve redução para logos
-                adaptedElement.style.width = element.style.width * logoScale;
-                adaptedElement.style.height = element.style.height * logoScale;
-
-                // Manter posicionamento relativo do logo
-                if (isStickingToLeftBorder && isStickingToTopBorder) {
-                    // Logo no canto superior esquerdo
-                    adaptedElement.style.x = 5;
-                    adaptedElement.style.y = 5;
-                } else if (isStickingToRightBorder && isStickingToTopBorder) {
-                    // Logo no canto superior direito
-                    adaptedElement.style.x = targetFormat.width - adaptedElement.style.width - 5;
-                    adaptedElement.style.y = 5;
-                } else if (isStickingToLeftBorder && isStickingToBottomBorder) {
-                    // Logo no canto inferior esquerdo
-                    adaptedElement.style.x = 5;
-                    adaptedElement.style.y = targetFormat.height - adaptedElement.style.height - 5;
-                } else if (isStickingToRightBorder && isStickingToBottomBorder) {
-                    // Logo no canto inferior direito
-                    adaptedElement.style.x = targetFormat.width - adaptedElement.style.width - 5;
-                    adaptedElement.style.y = targetFormat.height - adaptedElement.style.height - 5;
-                } else {
-                    // Posição relativa para logos em outras posições
-                    const relativeX = element.style.x / currentFormat.width;
-                    const relativeY = element.style.y / currentFormat.height;
-                    adaptedElement.style.x = relativeX * targetFormat.width;
-                    adaptedElement.style.y = relativeY * targetFormat.height;
-                }
-            } else if (isBanner) {
-                // Banners grandes devem se adaptar ao formato
-                if (isStickingToTopBorder) {
-                    // Banner de topo
-                    adaptedElement.style.x = 0;
-                    adaptedElement.style.y = 0;
-                    adaptedElement.style.width = targetFormat.width;
-                    // Manter proporção para altura
-                    adaptedElement.style.height = Math.min(
-                        targetFormat.height * 0.3,
-                        targetFormat.width / aspectRatio
-                    );
-                } else if (isStickingToBottomBorder) {
-                    // Banner de rodapé
-                    adaptedElement.style.x = 0;
-                    adaptedElement.style.width = targetFormat.width;
-                    adaptedElement.style.height = Math.min(
-                        targetFormat.height * 0.3,
-                        targetFormat.width / aspectRatio
-                    );
-                    adaptedElement.style.y = targetFormat.height - adaptedElement.style.height;
-                } else {
-                    // Banner central
-                    adaptedElement.style.width = targetFormat.width * 0.95;
-                    adaptedElement.style.height = adaptedElement.style.width / aspectRatio;
-                    // Centralizar
-                    adaptedElement.style.x = (targetFormat.width - adaptedElement.style.width) / 2;
-                    // Manter posição vertical relativa
-                    const relativeY = element.style.y / currentFormat.height;
-                    adaptedElement.style.y = relativeY * targetFormat.height;
-                }
-            } else {
-                // Imagens normais: manter proporção e adaptar tamanho
-                // Determinar se a limitação é largura ou altura
-                if (widthRatio < heightRatio) {
-                    // Limitado pela largura
-                    const newWidth = Math.min(targetFormat.width * 0.9, element.style.width * widthRatio);
-                    const newHeight = newWidth / aspectRatio;
-
-                    adaptedElement.style.width = newWidth;
-                    adaptedElement.style.height = newHeight;
-                } else {
-                    // Limitado pela altura
-                    const newHeight = Math.min(targetFormat.height * 0.7, element.style.height * heightRatio);
-                    const newWidth = newHeight * aspectRatio;
-
-                    adaptedElement.style.height = newHeight;
-                    adaptedElement.style.width = newWidth;
-                }
-
-                // Preservar posicionamento relativo
-                const relativeX = element.style.x / currentFormat.width;
-                const relativeY = element.style.y / currentFormat.height;
-                adaptedElement.style.x = relativeX * targetFormat.width;
-                adaptedElement.style.y = relativeY * targetFormat.height;
-
-                // Garantir que a imagem não ultrapasse os limites do canvas
-                if (adaptedElement.style.x + adaptedElement.style.width > targetFormat.width) {
-                    adaptedElement.style.x = Math.max(0, targetFormat.width - adaptedElement.style.width);
-                }
-
-                if (adaptedElement.style.y + adaptedElement.style.height > targetFormat.height) {
-                    adaptedElement.style.y = Math.max(0, targetFormat.height - adaptedElement.style.height);
-                }
-            }
-        }
-        else if (element.type === 'container') {
-            // Containers: ajustar proporcionalmente mas garantir que caiba no novo formato
-            adaptedElement.style.x = Math.max(0, element.style.x * widthRatio);
-            adaptedElement.style.y = Math.max(0, element.style.y * heightRatio);
-
-            // Ajustar tamanho proporcionalmente com limites
-            adaptedElement.style.width = Math.min(
-                targetFormat.width * 0.95,
-                Math.max(100, element.style.width * widthRatio)
-            );
-
-            adaptedElement.style.height = Math.min(
-                targetFormat.height * 0.95,
-                Math.max(100, element.style.height * heightRatio)
-            );
-
-            // Garantir que o container não saia do canvas
-            adaptedElement.style.x = Math.min(adaptedElement.style.x, targetFormat.width - adaptedElement.style.width);
-            adaptedElement.style.y = Math.min(adaptedElement.style.y, targetFormat.height - adaptedElement.style.height);
-        }
-        else {
-            // Padrão para outros tipos de elementos
-            adaptedElement.style.x = Math.max(0, element.style.x * widthRatio);
-            adaptedElement.style.y = Math.max(0, element.style.y * heightRatio);
-            adaptedElement.style.width = Math.max(20, element.style.width * widthRatio);
-            adaptedElement.style.height = Math.max(20, element.style.height * heightRatio);
-
-            // Garantir que o elemento não saia do canvas
-            adaptedElement.style.x = Math.min(adaptedElement.style.x, targetFormat.width - adaptedElement.style.width);
-            adaptedElement.style.y = Math.min(adaptedElement.style.y, targetFormat.height - adaptedElement.style.height);
-        }
-
-        // Limpar propriedades de porcentagem
-        adaptedElement.style.xPercent = undefined;
-        adaptedElement.style.yPercent = undefined;
-        adaptedElement.style.widthPercent = undefined;
-        adaptedElement.style.heightPercent = undefined;
-
-        return adaptedElement;
-    }
-
-    private tryParseJson(jsonString: string, targetFormats: BannerSize[]): any {
-        try {
-            // Tentar extrair JSON de blocos de código
-            const jsonMatch = jsonString.match(/```json\s*([\s\S]*?)\s*```/);
-            if (jsonMatch && jsonMatch[1]) {
-                try {
-                    return JSON.parse(jsonMatch[1]);
-                } catch (e) {
-                    // Ignorar erro e continuar
-                }
-            }
-
-            // Tentar encontrar e extrair array diretamente
-            const arrayMatch = jsonString.match(/\[\s*\{\s*"format"/s);
-            if (arrayMatch) {
-                const startIndex = jsonString.indexOf('[');
-                if (startIndex !== -1) {
-                    let depth = 0;
-                    let endIndex = startIndex;
-
-                    for (let i = startIndex; i < jsonString.length; i++) {
-                        if (jsonString[i] === '[') depth++;
-                        else if (jsonString[i] === ']') depth--;
-
-                        if (depth === 0) {
-                            endIndex = i + 1;
-                            break;
-                        }
-                    }
-
-                    if (endIndex > startIndex) {
-                        const jsonStr = jsonString.substring(startIndex, endIndex);
-                        try {
-                            return JSON.parse(jsonStr);
-                        } catch (e) {
-                            // Ignorar erro e continuar
-                        }
-                    }
-                }
-            }
-
-            // Tentar parse direto
             try {
-                const parsed = JSON.parse(jsonString);
+                // Processar este lote de formatos com IA
+                const batchLayouts = await this.perplexityService.refineLayoutWithPerplexity(
+                    currentFormat,
+                    elements,
+                    formatsBatch
+                );
 
-                // Normalizar para array se for objeto
-                if (!Array.isArray(parsed)) {
-                    // Se é um objeto de layout válido
-                    if (parsed && typeof parsed === 'object' && 'format' in parsed && 'elements' in parsed) {
-                        return [parsed];
-                    }
+                if (batchLayouts && Array.isArray(batchLayouts)) {
+                    const receivedFormats = batchLayouts.map(l => l.format.name);
+                    this.logger.log(`✅ Formatos recebidos no lote: ${receivedFormats.join(', ')}`);
 
-                    // Se contém array em alguma propriedade
-                    for (const key in parsed) {
-                        const value = parsed[key];
-                        if (Array.isArray(value)) {
-                            return value;
-                        }
-                    }
-
-                    // Tentar extrair layouts de objetos aninhados
-                    const layoutsArray: RefinedLayout[] = [];
-                    const targetFormatNames = targetFormats.map(f => f.name);
-
-                    for (const key in parsed) {
-                        const item = parsed[key];
-                        if (item && typeof item === 'object') {
-                            // Verificar se a chave corresponde a um formato alvo
-                            if (targetFormatNames.includes(key) && 'elements' in item) {
-                                layoutsArray.push({
-                                    format: targetFormats.find((f: BannerSize) => f.name === key) as BannerSize,
-                                    elements: item.elements
-                                });
-                            } else if ('format' in item && 'elements' in item) {
-                                layoutsArray.push(item);
-                            }
-                        }
-                    }
-
-                    if (layoutsArray.length > 0) {
-                        return layoutsArray;
-                    }
+                    allRefinedLayouts = [...allRefinedLayouts, ...batchLayouts];
+                    batchLayouts.forEach(layout => processedFormats.add(layout.format.name));
                 }
+            } catch (batchError: unknown) {
+                const errorMessage = batchError instanceof Error
+                    ? batchError.message
+                    : 'Erro desconhecido';
+                this.logger.error(`❌ Erro ao processar lote com Perplexity: ${errorMessage}`);
 
-                return parsed;
-            } catch (e) {
-                // Falha em todas as tentativas
-                throw new Error('Não foi possível extrair JSON válido da resposta');
+                // Para este lote específico, usamos o método baseado em regras
+                this.logger.log(`Usando método baseado em regras para o lote atual`);
+                const fallbackLayouts = formatsBatch.map((targetFormat: BannerSize) => {
+                    const adaptedElements = elements.map((element: EditorElement) =>
+                        LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
+                    );
+                    return { format: targetFormat, elements: adaptedElements };
+                });
+
+                allRefinedLayouts = [...allRefinedLayouts, ...fallbackLayouts];
+                formatsBatch.forEach(format => processedFormats.add(format.name));
             }
-        } catch (error) {
-            this.logger.error(`Erro ao analisar JSON: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
-            return null;
         }
+
+        // Verificar se todos os formatos foram processados
+        const missingFormats = targetFormats.filter(format => !processedFormats.has(format.name));
+        if (missingFormats.length > 0) {
+            this.logger.warn(`⚠️ Alguns formatos não foram processados: ${missingFormats.map(f => f.name).join(', ')}`);
+
+            // Processar os formatos faltantes com o método baseado em regras
+            const missingLayouts = missingFormats.map((targetFormat: BannerSize) => {
+                const adaptedElements = elements.map((element: EditorElement) =>
+                    LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
+                );
+                return { format: targetFormat, elements: adaptedElements };
+            });
+
+            allRefinedLayouts = [...allRefinedLayouts, ...missingLayouts];
+        }
+
+        return allRefinedLayouts;
     }
 
-    private tryFixJsonStructure(jsonString: string): string {
-        // Implementar correções comuns de estrutura JSON
-        let fixedJson = jsonString;
+    private processWithRules(
+        currentFormat: BannerSize, 
+        elements: EditorElement[], 
+        targetFormats: BannerSize[]
+    ): RefinedLayout[] {
+        this.logger.log('Utilizando refinamento baseado em regras (sem IA) para todos os formatos');
+        
+        return targetFormats.map((targetFormat: BannerSize) => {
+            const adaptedElements = elements.map((element: EditorElement) =>
+                LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
+            );
+            return { format: targetFormat, elements: adaptedElements };
+        });
+    }
 
-        // Corrigir vírgulas extras antes de fechar objetos ou arrays
-        fixedJson = fixedJson.replace(/,(\s*[}\]])/g, '$1');
+    private async saveRefinedLayouts(
+        currentFormat: BannerSize, 
+        refinedLayouts: RefinedLayout[]
+    ): Promise<void> {
+        const savedLayoutIds: number[] = [];
+        
+        for (const layout of refinedLayouts) {
+            try {
+                const layoutName = `${currentFormat.name} → ${layout.format.name}`;
+                const layoutDesc = `Layout convertido de ${currentFormat.width}x${currentFormat.height} para ${layout.format.width}x${layout.format.height}`;
+                const layoutContent = { format: layout.format, elements: layout.elements };
 
-        // Corrigir propriedades sem aspas (comum nas respostas da IA)
-        fixedJson = fixedJson.replace(/([{,]\s*)([a-zA-Z0-9_]+)(\s*:)/g, '$1"$2"$3');
+                const savedLayout = await this.layoutService.create({
+                    name: layoutName,
+                    description: layoutDesc,
+                    content: JSON.stringify(layoutContent),
+                    categoryId: null,
+                });
 
-        // Corrigir valores numéricos com vírgula em vez de ponto (ptBR)
-        fixedJson = fixedJson.replace(/"([^"]+)":\s*"(\d+),(\d+)"/g, '"$1": $2.$3');
+                savedLayoutIds.push(savedLayout.id);
+                this.logger.log(`✅ Layout para formato ${layout.format.name} salvo com ID: ${savedLayout.id}`);
+            } catch (error: any) {
+                this.logger.warn(`⚠️ Erro ao salvar layout para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
+            }
+        }
 
-        // Adicionar aspas em valores que deveriam ser strings mas estão sem aspas
-        fixedJson = fixedJson.replace(/:\s*([a-zA-Z][a-zA-Z0-9_\s]+)([,}\]])/g, ': "$1"$2');
-
-        // Remover aspas extras em valores numéricos
-        fixedJson = fixedJson.replace(/"([^"]+)":\s*"(\d+(\.\d+)?)"([,}\]])/g, '"$1": $2$4');
-
-        // Remover campos undefined ou null para evitar erros
-        fixedJson = fixedJson.replace(/"[^"]+": (undefined|null),?/g, '');
-
-        return fixedJson;
+        this.logger.log(`🎉 ${savedLayoutIds.length} de ${refinedLayouts.length} layouts refinados salvos no banco de dados`);
     }
 }

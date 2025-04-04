@@ -1,6 +1,7 @@
 import { Controller, Post, Body, Logger } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { RefinementService, RefinedLayout } from '../services/refinement.service';
+import { RefinementService } from '../services/refinement.service';
+import { RefinedLayout } from '../interfaces/layout.interface';
 
 @ApiTags('refinement')
 @Controller('ai')
