@@ -1,14 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
-import { LayoutService } from './layout.service';
 import { PerplexityService } from './perplexity.service';
 import { LayoutAdapterUtils } from '../utils/layout-adapter.utils';
-import { 
-    BannerSize, 
-    EditorElement, 
-    LayoutData, 
-    RefinedLayout 
+import { ArtboardService } from './artboard.service';
+import { LayoutService } from './layout.service';
+import {
+    BannerSize,
+    EditorElement,
+    LayoutData,
+    RefinedLayout
 } from '../interfaces/layout.interface';
 
 @Injectable()
@@ -17,17 +18,25 @@ export class RefinementService {
 
     constructor(
         private readonly httpService: HttpService,
-        private readonly layoutService: LayoutService,
+        private readonly artboardService: ArtboardService,
         private readonly configService: ConfigService,
-        private readonly perplexityService: PerplexityService
+        private readonly perplexityService: PerplexityService,
+        private readonly layoutService: LayoutService
     ) {
         this.logger.log('RefinementService inicializado');
     }
 
     async generateLayout(prompt: string, userId?: string): Promise<any> {
         // Primeiro verificamos se já existe um layout similar no banco de dados
-        const existingLayouts = await this.layoutService.findAll();
+        const existingLayouts = await this.artboardService.findAll();
         this.logger.log(`Buscando layouts similares ao prompt: '${prompt.substring(0, 50)}...'`);
+
+        // Converter o layout gerado para o novo formato de dados
+        const processLayoutForStorage = (layout: any) => ({
+            width: layout.width || 1920,
+            height: layout.height || 1080,
+            elements: layout.elements || []
+        });
 
         // Verificar se já existe um layout similar
         const similarLayout = this.findSimilarLayout(existingLayouts, prompt);
@@ -36,12 +45,16 @@ export class RefinementService {
 
             // Parse do conteúdo JSON
             try {
-                const content = typeof similarLayout.content === 'string'
-                    ? JSON.parse(similarLayout.content)
-                    : similarLayout.content;
-                return content;
+                return {
+                    layout_type: similarLayout.LayoutType,
+                    artboard: {
+                        width: similarLayout.width,
+                        height: similarLayout.height,
+                        elements: similarLayout.Element || []
+                    }
+                };
             } catch (error: any) {
-                this.logger.error(`Erro ao fazer parse do conteúdo do layout: ${error?.message || 'Erro desconhecido'}`);
+                this.logger.error(`Erro ao processar o layout encontrado: ${error?.message || 'Erro desconhecido'}`);
             }
         }
 
@@ -51,14 +64,27 @@ export class RefinementService {
 
         // Salva o novo layout no banco de dados
         try {
+            // Create a new layout
             const newLayout = await this.layoutService.create({
                 name: `Layout para: ${prompt.substring(0, 50)}...`,
                 description: prompt,
-                content: JSON.stringify(generatedLayout),
-                userId: userId,
-                categoryId: null,
+                categoryId: "default", // Já estamos usando string diretamente
+                tenantId: 1,
+                createdBy: parseInt(userId || '1'),
             });
-            this.logger.log(`Novo layout gerado e salvo no banco de dados com ID: ${newLayout.id}`);
+
+            // Create a new artboard for this layout
+            const newArtboard = await this.artboardService.create(
+                {
+                    name: `Artboard para: ${prompt.substring(0, 50)}...`,
+                    layout_id: newLayout.layout_id, // Use layout_id
+                    width: generatedLayout.width || 1920,
+                    height: generatedLayout.height || 1080,
+                },
+                1, // TODO: Get tenant_id from context
+                parseInt(userId || '1') // TODO: Handle created_by properly
+            );
+            this.logger.log(`Novo layout gerado com ID: ${newLayout.layout_id} e artboard com ID: ${newArtboard.artboard_id}`);
         } catch (error: any) {
             this.logger.error(`Erro ao salvar layout gerado: ${error?.message || 'Erro desconhecido'}`);
         }
@@ -77,9 +103,10 @@ export class RefinementService {
         let highestScore = 0;
 
         for (const layout of layouts) {
-            const layoutName = (layout.name || '').toLowerCase();
-            const layoutDesc = (layout.description || '').toLowerCase();
-            const combinedText = `${layoutName} ${layoutDesc}`;
+            const layoutName = (layout.LayoutType?.name || '').toLowerCase();
+            const layoutDesc = (layout.LayoutType?.description || '').toLowerCase();
+            const artboardName = (layout.name || '').toLowerCase();
+            const combinedText = `${layoutName} ${layoutDesc} ${artboardName}`;
 
             let score = 0;
             for (const keyword of keywords) {
@@ -248,106 +275,18 @@ export class RefinementService {
                 categoryId: null,
             });
 
-            this.logger.log(`✅ Layout original salvo no banco de dados com ID: ${savedOriginalLayout.id}`);
+            this.logger.log(`✅ Layout original salvo no banco de dados com ID: ${savedOriginalLayout.layout_id}`);
         } catch (error: any) {
             this.logger.warn(`⚠️ Erro ao salvar layout original: ${error?.message || 'Erro desconhecido'}`);
         }
     }
 
-    private async processWithAI(
-        currentFormat: BannerSize, 
-        elements: EditorElement[], 
-        targetFormats: BannerSize[]
-    ): Promise<RefinedLayout[]> {
-        this.logger.log('🧠 Tentando usar o Perplexity AI para refinamento avançado');
-        
-        // Criar um array para rastrear formatos processados com sucesso
-        const processedFormats = new Set<string>();
-        let allRefinedLayouts: RefinedLayout[] = [];
-        
-        // Processar formatos em lotes 
-        const batchSize = 1;
-        
-        for (let i = 0; i < targetFormats.length; i += batchSize) {
-            const formatsBatch = targetFormats.slice(i, i + batchSize);
-            const formatNames = formatsBatch.map(f => f.name).join(', ');
-            this.logger.log(`Processando lote ${Math.floor(i / batchSize) + 1}/${Math.ceil(targetFormats.length / batchSize)} com formatos: ${formatNames}`);
-
-            try {
-                // Processar este lote de formatos com IA
-                const batchLayouts = await this.perplexityService.refineLayoutWithPerplexity(
-                    currentFormat,
-                    elements,
-                    formatsBatch
-                );
-
-                if (batchLayouts && Array.isArray(batchLayouts)) {
-                    const receivedFormats = batchLayouts.map(l => l.format.name);
-                    this.logger.log(`✅ Formatos recebidos no lote: ${receivedFormats.join(', ')}`);
-
-                    allRefinedLayouts = [...allRefinedLayouts, ...batchLayouts];
-                    batchLayouts.forEach(layout => processedFormats.add(layout.format.name));
-                }
-            } catch (batchError: unknown) {
-                const errorMessage = batchError instanceof Error
-                    ? batchError.message
-                    : 'Erro desconhecido';
-                this.logger.error(`❌ Erro ao processar lote com Perplexity: ${errorMessage}`);
-
-                // Para este lote específico, usamos o método baseado em regras
-                this.logger.log(`Usando método baseado em regras para o lote atual`);
-                const fallbackLayouts = formatsBatch.map((targetFormat: BannerSize) => {
-                    const adaptedElements = elements.map((element: EditorElement) =>
-                        LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
-                    );
-                    return { format: targetFormat, elements: adaptedElements };
-                });
-
-                allRefinedLayouts = [...allRefinedLayouts, ...fallbackLayouts];
-                formatsBatch.forEach(format => processedFormats.add(format.name));
-            }
-        }
-
-        // Verificar se todos os formatos foram processados
-        const missingFormats = targetFormats.filter(format => !processedFormats.has(format.name));
-        if (missingFormats.length > 0) {
-            this.logger.warn(`⚠️ Alguns formatos não foram processados: ${missingFormats.map(f => f.name).join(', ')}`);
-
-            // Processar os formatos faltantes com o método baseado em regras
-            const missingLayouts = missingFormats.map((targetFormat: BannerSize) => {
-                const adaptedElements = elements.map((element: EditorElement) =>
-                    LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
-                );
-                return { format: targetFormat, elements: adaptedElements };
-            });
-
-            allRefinedLayouts = [...allRefinedLayouts, ...missingLayouts];
-        }
-
-        return allRefinedLayouts;
-    }
-
-    private processWithRules(
-        currentFormat: BannerSize, 
-        elements: EditorElement[], 
-        targetFormats: BannerSize[]
-    ): RefinedLayout[] {
-        this.logger.log('Utilizando refinamento baseado em regras (sem IA) para todos os formatos');
-        
-        return targetFormats.map((targetFormat: BannerSize) => {
-            const adaptedElements = elements.map((element: EditorElement) =>
-                LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
-            );
-            return { format: targetFormat, elements: adaptedElements };
-        });
-    }
-
     private async saveRefinedLayouts(
-        currentFormat: BannerSize, 
+        currentFormat: BannerSize,
         refinedLayouts: RefinedLayout[]
     ): Promise<void> {
         const savedLayoutIds: number[] = [];
-        
+
         for (const layout of refinedLayouts) {
             try {
                 const layoutName = `${currentFormat.name} → ${layout.format.name}`;
@@ -361,8 +300,8 @@ export class RefinementService {
                     categoryId: null,
                 });
 
-                savedLayoutIds.push(savedLayout.id);
-                this.logger.log(`✅ Layout para formato ${layout.format.name} salvo com ID: ${savedLayout.id}`);
+                savedLayoutIds.push(savedLayout.layout_id);
+                this.logger.log(`✅ Layout para formato ${layout.format.name} salvo com ID: ${savedLayout.layout_id}`);
             } catch (error: any) {
                 this.logger.warn(`⚠️ Erro ao salvar layout para formato ${layout.format.name}: ${error?.message || 'Erro desconhecido'}`);
             }
@@ -370,4 +309,21 @@ export class RefinementService {
 
         this.logger.log(`🎉 ${savedLayoutIds.length} de ${refinedLayouts.length} layouts refinados salvos no banco de dados`);
     }
+
+    private processWithRules(
+        currentFormat: BannerSize,
+        elements: EditorElement[],
+        targetFormats: BannerSize[]
+    ): RefinedLayout[] {
+        this.logger.log('Utilizando refinamento baseado em regras (sem IA) para todos os formatos');
+
+        return targetFormats.map((targetFormat: BannerSize) => {
+            const adaptedElements = elements.map((element: EditorElement) =>
+                LayoutAdapterUtils.adaptElementToNewFormat(element, currentFormat, targetFormat)
+            );
+            return { format: targetFormat, elements: adaptedElements };
+        });
+    };
+
+
 }

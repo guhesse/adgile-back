@@ -1,1 +1,94 @@
-// O schema atual está correto, não são necessárias alterações
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = "mysql://root:@localhost:3306/adgile"
+}
+
+model User {
+  user_id    Int      @id @default(autoincrement())
+  email      String   @unique
+  password   String
+  name       String
+  tenant_id  Int
+  created_at DateTime @default(now())
+  layouts    Layout[]
+  Artboard   Artboard[]
+  resources  Resource[]
+}
+
+model Layout {
+  layout_id    Int       @id @default(autoincrement())
+  name         String
+  description  String?
+  content      String?   @db.LongText
+  category_id  String?
+  tenant_id    Int
+  created_by   Int
+  created_at   DateTime  @default(now())
+  User         User      @relation(fields: [created_by], references: [user_id])
+  Artboard     Artboard[]
+}
+
+model Artboard {
+  artboard_id Int       @id @default(autoincrement())
+  layout_id   Int
+  name        String
+  width       Int
+  height      Int
+  tenant_id   Int
+  created_by  Int
+  created_at  DateTime  @default(now())
+  Layout      Layout    @relation(fields: [layout_id], references: [layout_id])
+  User        User      @relation(fields: [created_by], references: [user_id])
+  Element     Element[]
+}
+
+model Element {
+  element_id    Int       @id @default(autoincrement())
+  artboard_id   Int
+  element_type  String
+  position_x    Float
+  position_y    Float
+  width         Float
+  height        Float
+  z_index       Int       @default(0)
+  tenant_id     Int
+  created_at    DateTime  @default(now())
+  Artboard      Artboard  @relation(fields: [artboard_id], references: [artboard_id])
+  ElementStyle  ElementStyle[]
+  ElementContent ElementContent[]
+}
+
+model ElementStyle {
+  style_id       Int    @id @default(autoincrement())
+  element_id     Int
+  style_property String
+  style_value    String
+  tenant_id      Int
+  Element        Element @relation(fields: [element_id], references: [element_id])
+}
+
+model ElementContent {
+  content_id     Int    @id @default(autoincrement())
+  element_id     Int
+  content_type   String
+  content_value  String?
+  tenant_id      Int
+  Element        Element @relation(fields: [element_id], references: [element_id])
+}
+
+model Resource {
+  resource_id      Int    @id @default(autoincrement())
+  tenant_id        Int
+  resource_type    String
+  external_path    String
+  mime_type        String
+  original_filename String
+  file_size        BigInt
+  created_by       Int
+  created_at       DateTime @default(now())
+  User             User     @relation(fields: [created_by], references: [user_id])
+}

@@ -1,85 +1,100 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
-import { CreateLayoutDto, UpdateLayoutDto } from '../dtos/layout.dto';
+import { CreateLayoutDto } from '../dtos/create-layout.dto';
 
 @Injectable()
 export class LayoutService {
-  constructor(private prisma: PrismaService) {}
+    private readonly logger = new Logger(LayoutService.name);
 
-  async findAll() {
-    return this.prisma.layout.findMany({
-      include: {
-        category: true,
-      },
-    });
-  }
+    constructor(
+        private readonly prisma: PrismaService
+    ) {}
 
-  async findById(id: number) {
-    const layout = await this.prisma.layout.findUnique({
-      where: { id },
-      include: {
-        category: true,
-      },
-    });
-
-    if (!layout) {
-      throw new NotFoundException(`Layout com ID ${id} não encontrado`);
+    async findAll(tenantId?: number) {
+        const where = tenantId ? { tenant_id: tenantId } : {};
+        return this.prisma.layout.findMany({
+            where,
+            orderBy: {
+                created_at: 'desc',
+            },
+            include: {
+                Artboard: true,
+            },
+        });
     }
 
-    return layout;
-  }
+    async findById(id: number) {
+        const layout = await this.prisma.layout.findUnique({
+            where: { layout_id: id },
+            include: {
+                Artboard: true,
+            },
+        });
 
-  async create(data: CreateLayoutDto) {
-    // Assegurar que o conteúdo seja armazenado como JSON string
-    const contentString = typeof data.content === 'string' 
-      ? data.content 
-      : JSON.stringify(data.content);
+        if (!layout) {
+            throw new NotFoundException(`Layout com ID ${id} não encontrado`);
+        }
 
-    return this.prisma.layout.create({
-      data: {
-        ...data,
-        content: contentString,
-      },
-      include: {
-        category: true,
-      },
-    });
-  }
-
-  async update(id: number, data: UpdateLayoutDto) {
-    // Verificar se o layout existe
-    await this.findById(id);
-
-    // Processar o conteúdo, se fornecido
-    let processedData = { ...data };
-    if (data.content && typeof data.content !== 'string') {
-      processedData.content = JSON.stringify(data.content);
+        return layout;
     }
 
-    return this.prisma.layout.update({
-      where: { id },
-      data: processedData,
-      include: {
-        category: true,
-      },
-    });
-  }
+    async create(data: CreateLayoutDto) {
+        this.logger.log(`Criando layout com categoria: ${data.categoryId || 'nenhuma'}`);
+        
+        return this.prisma.layout.create({
+            data: {
+                name: data.name,
+                description: data.description,
+                content: data.content,
+                category_id: data.categoryId, // Usando a string diretamente
+                tenant_id: data.tenantId || 1,
+                created_by: data.createdBy || 1,
+            },
+            include: {
+                Artboard: true,
+            },
+        });
+    }
 
-  async remove(id: number) {
-    // Verificar se o layout existe
-    await this.findById(id);
+    async update(id: number, data: Partial<CreateLayoutDto>) {
+        await this.findById(id);
 
-    return this.prisma.layout.delete({
-      where: { id },
-    });
-  }
+        return this.prisma.layout.update({
+            where: { layout_id: id },
+            data: {
+                name: data.name,
+                description: data.description,
+                content: data.content,
+                category_id: data.categoryId, // Usando a string diretamente
+            },
+            include: {
+                Artboard: true,
+            },
+        });
+    }
 
-  async findByCategoryId(categoryId: number) {
-    return this.prisma.layout.findMany({
-      where: { categoryId },
-      include: {
-        category: true,
-      },
-    });
-  }
+    async remove(id: number) {
+        await this.findById(id);
+        return this.prisma.layout.delete({
+            where: { layout_id: id },
+        });
+    }
+
+    async findByCategoryId(categoryId: number) {
+        // Este método ainda precisa existir para compatibilidade com código existente
+        // mas podemos redirecionar para o método que usa string
+        return this.findByCategoryString(categoryId.toString());
+    }
+    
+    async findByCategoryString(categoryString: string) {
+        return this.prisma.layout.findMany({
+            where: { category_id: categoryString },
+            orderBy: {
+                created_at: 'desc',
+            },
+            include: {
+                Artboard: true,
+            },
+        });
+    }
 }

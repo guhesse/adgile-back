@@ -1,78 +1,34 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsOptional, IsInt, IsObject } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateLayoutDto {
-  @ApiProperty({ description: 'Nome do layout' })
-  @IsString()
-  name!: string;
+    @ApiProperty({ description: 'Name of the layout' })
+    name: string;
 
-  @ApiPropertyOptional({ description: 'Descrição do layout' })
-  @IsString()
-  @IsOptional()
-  description?: string;
+    @ApiProperty({ description: 'Description of the layout' })
+    description: string;
 
-  @ApiProperty({ description: 'Conteúdo do layout (elementos, configurações, etc.)' })
-  @IsObject()
-  content!: any;
+    @ApiProperty({ description: 'Layout content in JSON format' })
+    content: string;
 
-  @ApiPropertyOptional({ description: 'ID do usuário criador' })
-  @IsString()
-  @IsOptional()
-  userId?: string;
-
-  @ApiPropertyOptional({ description: 'ID da categoria' })
-  @IsInt()
-  @IsOptional()
-  categoryId?: number;
+    @ApiProperty({ description: 'Category ID of the layout', required: false })
+    categoryId?: number | null;
 }
 
-export class UpdateLayoutDto {
-  @ApiPropertyOptional({ description: 'Nome do layout' })
-  @IsString()
-  @IsOptional()
-  name?: string;
-
-  @ApiPropertyOptional({ description: 'Descrição do layout' })
-  @IsString()
-  @IsOptional()
-  description?: string;
-
-  @ApiPropertyOptional({ description: 'Conteúdo do layout (elementos, configurações, etc.)' })
-  @IsObject()
-  @IsOptional()
-  content?: any;
-
-  @ApiPropertyOptional({ description: 'ID da categoria' })
-  @IsInt()
-  @IsOptional()
-  categoryId?: number;
-}
+export class UpdateLayoutDto extends CreateLayoutDto {}
 
 export class LayoutResponseDto {
-  @ApiProperty()
-  id!: number;
+    @ApiProperty({ description: 'Layout ID' })
+    id: number;
 
-  @ApiProperty()
-  name!: string;
+    @ApiProperty({ description: 'Name of the layout' })
+    name: string;
 
-  @ApiPropertyOptional()
-  description?: string;
+    @ApiProperty({ description: 'Description of the layout' })
+    description: string;
 
-  @ApiProperty()
-  content!: any;
+    @ApiProperty({ description: 'Layout content in JSON format' })
+    content: string;
 
-  @ApiPropertyOptional()
-  userId?: string;
-
-  @ApiPropertyOptional()
-  categoryId?: number;
-
-  @ApiProperty()
-  createdAt!: Date;
-
-  @ApiProperty()
-  updatedAt!: Date;
-  
-  @ApiPropertyOptional()
-  category?: any;
+    @ApiProperty({ description: 'ID of the associated artboard' })
+    artboard_id: number;
 }

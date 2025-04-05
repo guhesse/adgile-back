@@ -1,55 +1,60 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Put, Param, Delete, Logger, Query } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
 import { LayoutService } from '../services/layout.service';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { CreateLayoutDto, UpdateLayoutDto, LayoutResponseDto } from '../dtos/layout.dto';
+import { CreateLayoutDto } from '../dtos/create-layout.dto';
 
 @ApiTags('layouts')
 @Controller('layouts')
 export class LayoutController {
-  constructor(private layoutService: LayoutService) {}
+    private readonly logger = new Logger(LayoutController.name);
 
-  @ApiOperation({ summary: 'Obter todos os layouts' })
-  @ApiResponse({ status: 200, description: 'Lista de layouts retornada com sucesso', type: [LayoutResponseDto] })
-  @Get()
-  findAll() {
-    return this.layoutService.findAll();
-  }
+    constructor(
+        private readonly layoutService: LayoutService
+    ) {}
 
-  @ApiOperation({ summary: 'Obter layout por ID' })
-  @ApiResponse({ status: 200, description: 'Layout encontrado com sucesso', type: LayoutResponseDto })
-  @ApiResponse({ status: 404, description: 'Layout não encontrado' })
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.layoutService.findById(+id);
-  }
+    @Get()
+    @ApiOperation({ summary: 'Get all layouts' })
+    @ApiResponse({ status: 200, description: 'Returns all layouts' })
+    @ApiQuery({ name: 'tenantId', required: false, type: Number })
+    async findAll(@Query('tenantId') tenantId?: number) {
+        this.logger.log(`Buscando layouts${tenantId ? ` para tenant ${tenantId}` : ''}`);
+        return this.layoutService.findAll(tenantId ? +tenantId : undefined);
+    }
 
-  @ApiOperation({ summary: 'Criar novo layout' })
-  @ApiResponse({ status: 201, description: 'Layout criado com sucesso', type: LayoutResponseDto })
-  @Post()
-  create(@Body() createLayoutDto: CreateLayoutDto) {
-    return this.layoutService.create(createLayoutDto);
-  }
+    @Get(':id')
+    @ApiOperation({ summary: 'Get layout by ID' })
+    @ApiResponse({ status: 200, description: 'Returns a layout by ID' })
+    async findById(@Param('id') id: string) {
+        return this.layoutService.findById(+id);
+    }
 
-  @ApiOperation({ summary: 'Atualizar layout existente' })
-  @ApiResponse({ status: 200, description: 'Layout atualizado com sucesso', type: LayoutResponseDto })
-  @ApiResponse({ status: 404, description: 'Layout não encontrado' })
-  @Put(':id')
-  update(@Param('id') id: string, @Body() updateLayoutDto: UpdateLayoutDto) {
-    return this.layoutService.update(+id, updateLayoutDto);
-  }
+    @Post()
+    @ApiOperation({ summary: 'Create a new layout' })
+    @ApiResponse({ status: 201, description: 'Layout created successfully' })
+    async create(@Body() createLayoutDto: CreateLayoutDto) {
+        this.logger.log(`Criando novo layout: ${createLayoutDto.name}, categoria: ${createLayoutDto.categoryId || 'nenhuma'}`);
+        return this.layoutService.create(createLayoutDto);
+    }
 
-  @ApiOperation({ summary: 'Remover layout' })
-  @ApiResponse({ status: 200, description: 'Layout removido com sucesso' })
-  @ApiResponse({ status: 404, description: 'Layout não encontrado' })
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.layoutService.remove(+id);
-  }
+    @Put(':id')
+    @ApiOperation({ summary: 'Update a layout' })
+    @ApiResponse({ status: 200, description: 'Layout updated successfully' })
+    async update(@Param('id') id: string, @Body() updateLayoutDto: Partial<CreateLayoutDto>) {
+        return this.layoutService.update(+id, updateLayoutDto);
+    }
 
-  @ApiOperation({ summary: 'Obter layouts por categoria' })
-  @ApiResponse({ status: 200, description: 'Lista de layouts retornada com sucesso', type: [LayoutResponseDto] })
-  @Get('category/:categoryId')
-  findByCategory(@Param('categoryId') categoryId: string) {
-    return this.layoutService.findByCategoryId(+categoryId);
-  }
+    @Delete(':id')
+    @ApiOperation({ summary: 'Delete a layout' })
+    @ApiResponse({ status: 200, description: 'Layout deleted successfully' })
+    async remove(@Param('id') id: string) {
+        return this.layoutService.remove(+id);
+    }
+
+    @Get('category/:categoryId')
+    @ApiOperation({ summary: 'Get layouts by category ID' })
+    @ApiResponse({ status: 200, description: 'Returns layouts by category ID' })
+    async findByCategoryId(@Param('categoryId') categoryId: string) {
+        // Agora podemos simplesmente usar o categoryId como string diretamente
+        return this.layoutService.findByCategoryString(categoryId);
+    }
 }
